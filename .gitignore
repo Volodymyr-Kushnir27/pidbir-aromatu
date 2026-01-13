@@ -1,5 +1,3 @@
-cat > .gitignore << 'EOF'
-node_modules/
+
 .env
-*.sqlite
-EOF
+
