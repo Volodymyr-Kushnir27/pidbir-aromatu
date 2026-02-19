@@ -1,8 +1,10 @@
-
+// index.js
 require("dotenv").config();
 const { Telegraf, Markup } = require("telegraf");
 const OpenAI = require("openai");
 const Database = require("better-sqlite3");
+
+const AI = require("./AI");
 
 /* =======================
    ENV CHECKS
@@ -13,7 +15,8 @@ if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY missing");
 
 const EMBED_MODEL = process.env.EMBED_MODEL || "text-embedding-3-small";
 const CHAT_MODEL = process.env.CHAT_MODEL || "gpt-4o-mini";
-const CLASSIFY_MODEL = process.env.CLASSIFY_MODEL || CHAT_MODEL;
+
+const RESULT_MAX = 3;
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const db = new Database(process.env.DB_PATH, { readonly: true });
@@ -22,91 +25,40 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 /* =======================
    HELPERS
 ======================= */
-function stripHtml(s) {
-  return (s || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function pickFirstImageUrl(image_url) {
-  if (!image_url) return null;
-  const parts = String(image_url)
+function pickFirstImageUrl(photo) {
+  if (!photo) return null;
+  const parts = String(photo)
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
 
-  // Prefer “image-like” urls, else take first
-  const ok = parts.find((u) => /^https?:\/\//i.test(u) && /\.(png|jpe?g|webp)(\?.*)?$/i.test(u));
+  const ok = parts.find(
+    (u) => /^https?:\/\//i.test(u) && /\.(png|jpe?g|webp)(\?.*)?$/i.test(u)
+  );
   return ok || parts[0] || null;
 }
 
-function cosineSim(a, b) {
-  let dot = 0, na = 0, nb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    na += a[i] * a[i];
-    nb += b[i] * b[i];
-  }
-  const denom = Math.sqrt(na) * Math.sqrt(nb);
-  return denom ? dot / denom : 0;
+function clipTelegram(text, limit = 980) {
+  const t = (text || "").trim();
+  return t.length > limit ? t.slice(0, limit) + "…" : t;
+}
+
+function genderLabel(p) {
+  const t = `${p.for_whom || ""} ${p.komu || ""}`.toLowerCase();
+  if (t.includes("унісекс") || t.includes("unisex")) return "🧑‍🤝‍🧑 <b>Унісекс</b>";
+  if (t.includes("чолов") || t.includes("муж") || t.includes("men") || t.includes("homme")) return "👨 <b>Чоловічий</b>";
+  if (t.includes("жіноч") || t.includes("жен") || t.includes("women") || t.includes("femme")) return "👩 <b>Жіночий</b>";
+  return "⚪ <b>Стать не вказана</b>";
 }
 
 /* =======================
-   GENDER LOGIC (heuristics)
+   DB LOAD
 ======================= */
-function desiredGenderFromQuery(q) {
-  q = (q || "").toLowerCase();
-  if (q.includes("унісекс") || q.includes("unisex")) return "unisex";
-  if (q.includes("чолов") || q.includes("муж") || q.includes("men") || q.includes("homme")) return "male";
-  if (q.includes("жіноч") || q.includes("жен") || q.includes("women") || q.includes("femme")) return "female";
-  return null;
-}
+const perfumesAll = db.prepare(`SELECT * FROM perfumes`).all();
+AI.buildCodeIndex(perfumesAll);
 
-function inferGender(p) {
-  const t = `${p.categories || ""} ${p.name || ""} ${p.short_desc || ""} ${p.description || ""}`.toLowerCase();
+const perfumesById = new Map(perfumesAll.map((p) => [p.id, p]));
 
-  // Priority: unisex
-  if (t.includes("унісекс") || t.includes("unisex") || t.includes("for all")) return "unisex";
-
-  const male = t.includes("чолов") || t.includes("men") || t.includes("homme") || t.includes("pour homme");
-  const female = t.includes("жіноч") || t.includes("women") || t.includes("femme") || t.includes("pour femme");
-
-  if (male && female) return "unisex";
-  if (male) return "male";
-  if (female) return "female";
-  return "unknown";
-}
-
-function genderLabel(g) {
-  if (g === "male") return "👨 Чоловічий";
-  if (g === "female") return "👩 Жіночий";
-  if (g === "unisex") return "🧑‍🤝‍🧑 Унісекс";
-  return "⚪ Стать не вказана";
-}
-
-/* =======================
-   DB QUERIES
-======================= */
-const keywordSearchStmt = db.prepare(`
-  SELECT id, name, image_url, categories, short_desc, description
-  FROM perfumes
-  WHERE type='variable'
-    AND (
-      name LIKE '%' || ? || '%'
-      OR categories LIKE '%' || ? || '%'
-      OR short_desc LIKE '%' || ? || '%'
-      OR description LIKE '%' || ? || '%'
-    )
-  LIMIT 12
-`);
-
-const perfumeByIdStmt = db.prepare(`
-  SELECT id, name, image_url, categories, short_desc, description
-  FROM perfumes
-  WHERE id=?
-`);
-
-/* =======================
-   EMBEDDINGS LOAD (in-memory)
-======================= */
 function loadEmbeddings() {
   try {
     const rows = db
@@ -123,273 +75,180 @@ function loadEmbeddings() {
   }
 }
 
-let EMBEDDINGS = loadEmbeddings(); // { perfume_id, embedding }
+let EMBEDDINGS = loadEmbeddings();
 const EMB_MAP = new Map(EMBEDDINGS.map((e) => [e.perfume_id, e.embedding]));
 
 /* =======================
-   CAPTION CACHE (for in-place toggle)
+   UI
 ======================= */
-// key: `${chatId}:${messageId}` -> { reasonCaption, compCaption, perfumeId }
-const CAPTION_CACHE = new Map();
-
-function cacheSet(key, value) {
-  CAPTION_CACHE.set(key, value);
-  if (CAPTION_CACHE.size > 1000) {
-    const firstKey = CAPTION_CACHE.keys().next().value;
-    CAPTION_CACHE.delete(firstKey);
-  }
-}
-
-/* =======================
-   OpenAI (embeddings + reasons + classifier)
-======================= */
-async function embedText(text) {
-  const r = await openai.embeddings.create({
-    model: EMBED_MODEL,
-    input: text,
-    encoding_format: "float",
-  });
-  return r.data[0].embedding;
-}
-
-function makePerfumeFacts(p) {
-  const cat = stripHtml(p.categories);
-  const sd = stripHtml(p.short_desc);
-  const d = stripHtml(p.description);
-  const facts = [];
-  if (cat) facts.push(`Категорії: ${cat}`);
-  if (sd) facts.push(`Коротко: ${sd}`);
-  if (d) facts.push(`Опис: ${d}`);
-  return facts.join("\n");
-}
-
-async function gptReasons(userQuery, perfumes) {
-  try {
-    const items = perfumes.map((p) => ({
-      id: p.id,
-      name: p.name,
-      gender: genderLabel(inferGender(p)),
-      facts: makePerfumeFacts(p).slice(0, 900),
-    }));
-
-    const prompt = [
-      "Ти консультант з парфумів.",
-      "Завдання: для кожного кандидата дай коротке пояснення (1-2 речення), чому він підходить під запит користувача.",
-      "Важливо:",
-      "- Не вигадуй нот/властивостей, яких немає у facts.",
-      "- Пояснення має спиратися лише на facts.",
-      "- Відповідь ПОВИННА бути валідним JSON без будь-якого додаткового тексту.",
-      'Формат: {"<id>":"пояснення", ...}',
-      "",
-      `Запит користувача: ${userQuery}`,
-      "",
-      "Кандидати:",
-      JSON.stringify(items, null, 2),
-    ].join("\n");
-
-    const resp = await openai.chat.completions.create({
-      model: CHAT_MODEL,
-      messages: [
-        { role: "system", content: "Відповідай тільки валідним JSON." },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.2,
-    });
-
-    const text = resp.choices?.[0]?.message?.content?.trim() || "";
-    const obj = JSON.parse(text);
-
-    const map = new Map();
-    for (const [k, v] of Object.entries(obj)) {
-      const id = Number(k);
-      if (Number.isFinite(id) && typeof v === "string") {
-        map.set(id, v.trim());
-      }
-    }
-    return map;
-  } catch (e) {
-    console.error("gptReasons error:", e?.message || e);
-    return new Map();
-  }
-}
-
-async function isPerfumeQuery(text) {
-  const t = (text || "").trim();
-
-  if (t.length < 3) return { ok: false, reason: "too_short" };
-
-  const quick = t.toLowerCase();
-  const perfumeHints = [
-    "аромат", "парф", "духи", "ноти", "шлейф", "стійк",
-    "ваніль", "цитрус", "квіт", "дерев", "пудр",
-    "свіж", "солод", "унісекс", "чолов", "жіноч",
-    "summer", "winter", "fresh", "sweet", "citrus", "floral",
-    "chanel", "dior", "armani", "versace",
-    "пахне", "пахнути", "запах", "духів"
-  ];
-  if (perfumeHints.some((k) => quick.includes(k))) return { ok: true, reason: "keyword" };
-
-  try {
-    const prompt = `
-Ти модератор запитів до бота підбору парфумів.
-Визнач: це запит на підбір аромату чи ні.
-
-ПОВЕРНИ ТІЛЬКИ JSON:
-{"ok": true/false, "category": "perfume|offtopic|unclear", "hint": "короткий опис, що зрозумів"}
-
-Правила:
-- ok=true якщо користувач описує бажаний аромат, асоціації, сезон, стать, стиль, або просить "схоже на X".
-- ok=false якщо привітання/рандомні символи/не по темі/немає сенсу.
-- ok=false якщо текст занадто загальний і не зрозуміло, що потрібно підібрати.
-
-Текст користувача: """${t}"""
-    `.trim();
-
-    const resp = await openai.chat.completions.create({
-      model: CLASSIFY_MODEL,
-      messages: [
-        { role: "system", content: "Відповідай тільки валідним JSON." },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0,
-    });
-
-    const raw = resp.choices?.[0]?.message?.content?.trim() || "";
-    const obj = JSON.parse(raw);
-
-    const ok = obj && typeof obj.ok === "boolean" ? obj.ok : false;
-    const category = typeof obj.category === "string" ? obj.category : "unclear";
-    const hint = typeof obj.hint === "string" ? obj.hint : "";
-
-    return { ok, category, hint };
-  } catch (e) {
-    console.error("isPerfumeQuery error:", e?.message || e);
-    return { ok: false, reason: "classifier_error" };
-  }
-}
-
-/* =======================
-   SEARCH FUNCTIONS
-======================= */
-async function semanticSearchByQuery(query, limit = 10) {
-  const qEmb = await embedText(query);
-
-  return EMBEDDINGS
-    .map((e) => ({ id: e.perfume_id, score: cosineSim(qEmb, e.embedding) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((x) => perfumeByIdStmt.get(x.id))
-    .filter(Boolean);
-}
-
-function similarByPerfumeId(baseId, limit = 10) {
-  const base = EMB_MAP.get(baseId);
-  if (!base) return [];
-
-  return EMBEDDINGS
-    .filter((e) => e.perfume_id !== baseId)
-    .map((e) => ({ id: e.perfume_id, score: cosineSim(base, e.embedding) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((x) => perfumeByIdStmt.get(x.id))
-    .filter(Boolean);
-}
-
-/* =======================
-   UI BUILDERS
-======================= */
-function actionButtons(id) {
+function buttons(id) {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback("Склад", `comp:${id}`),
-      Markup.button.callback("Схоже", `sim:${id}`),
+      Markup.button.callback("🧾 Ноти", `tog:notes:${id}`),
+      Markup.button.callback("🌤️ Сезон", `tog:season:${id}`),
     ],
+    [Markup.button.callback("✨ Схоже", `sim:${id}`)],
   ]);
 }
 
-function actionButtonsBack(id) {
-  return Markup.inlineKeyboard([
-    [
-      Markup.button.callback("⬅️ Назад", `back:${id}`),
-      Markup.button.callback("Схоже", `sim:${id}`),
-    ],
-  ]);
+function baseCard(p) {
+  const name = AI.stripHtml(p.name || "Аромат");
+  const g = genderLabel(p);
+
+  const type = AI.stripHtml(p.type || "");
+  const occ = AI.stripHtml(p.occasion || "");
+  const age = AI.stripHtml(p.age || "");
+  const desc = AI.stripHtml(p.description || "");
+
+  const lines = [
+    `<b>${name}</b>`,
+    g,
+    "",
+    `<b>Тип:</b> ${type || "—"}`,
+    `<b>Для події:</b> ${occ || "—"}`,
+    `<b>Вік:</b> ${age || "—"}`,
+    "",
+    `<b>Опис:</b> ${desc ? clipTelegram(desc, 340) : "—"}`,
+  ].join("\n");
+
+  return clipTelegram(lines, 1000);
 }
 
-function makeCaptionWithReason(p, reason) {
-  const g = genderLabel(inferGender(p));
-  const r = (reason || "").trim();
-  const caption = `${p.name}\n${g}\n\n${r || "Підібрано за вашим запитом."}`;
-  return caption.length > 1000 ? caption.slice(0, 1000) + "…" : caption;
+function notesCard(p) {
+  const name = AI.stripHtml(p.name || "Аромат");
+  const g = genderLabel(p);
+  const notes = AI.stripHtml(p.notes || "") || "—";
+  return clipTelegram(`<b>${name}</b>\n${g}\n\n<b>Ноти:</b>\n${notes}`, 1000);
 }
 
-function makeCompositionCaption(p) {
-  const g = genderLabel(inferGender(p));
-  const short = stripHtml(p.short_desc || "");
-  const desc = stripHtml(p.description || "");
-
-  let body = "";
-  if (short) body += `Коротко: ${short}\n\n`;
-  if (desc) body += `Опис: ${desc}`;
-  if (!body.trim()) body = "Опис відсутній.";
-
-  const text = `${p.name}\n${g}\n\n${body}`.trim();
-  return text.length > 1000 ? text.slice(0, 1000) + "…" : text;
+function seasonCard(p) {
+  const name = AI.stripHtml(p.name || "Аромат");
+  const g = genderLabel(p);
+  const season = AI.stripHtml(p.season || "") || "—";
+  return clipTelegram(`<b>${name}</b>\n${g}\n\n<b>Сезон:</b>\n${season}`, 1000);
 }
 
 /* =======================
-   SEND
+   Toggle cache
 ======================= */
-async function sendPerfumes(ctx, userQuery, perfumes) {
-  const reasons = await gptReasons(userQuery, perfumes);
+const TOGGLE_CACHE = new Map();
+function toggleCacheSet(key, val) {
+  TOGGLE_CACHE.set(key, val);
+  if (TOGGLE_CACHE.size > 3000) {
+    const first = TOGGLE_CACHE.keys().next().value;
+    TOGGLE_CACHE.delete(first);
+  }
+}
 
-  for (const p of perfumes) {
-    const photo = pickFirstImageUrl(p.image_url);
-    const reasonCaption = makeCaptionWithReason(p, reasons.get(p.id));
-    const compCaption = makeCompositionCaption(p);
+/* =======================
+   SEND (1..3)
+======================= */
+async function sendPerfumes(ctx, perfumes) {
+  for (const p of perfumes.slice(0, RESULT_MAX)) {
+    const photo = pickFirstImageUrl(p.photo);
+    const base = baseCard(p);
+    const notes = notesCard(p);
+    const season = seasonCard(p);
 
+    let sent;
     try {
-      let sent;
-
       if (photo) {
-        sent = await ctx.replyWithPhoto(photo, { caption: reasonCaption, ...actionButtons(p.id) });
+        sent = await ctx.replyWithPhoto(photo, {
+          caption: base,
+          parse_mode: "HTML",
+          ...buttons(p.id),
+        });
       } else {
-        sent = await ctx.reply(reasonCaption, actionButtons(p.id));
-      }
-
-      const chatId = sent?.chat?.id;
-      const msgId = sent?.message_id;
-      if (chatId && msgId) {
-        cacheSet(`${chatId}:${msgId}`, { reasonCaption, compCaption, perfumeId: p.id });
+        sent = await ctx.reply(base, { parse_mode: "HTML", ...buttons(p.id) });
       }
     } catch (e) {
       console.error("send failed:", e?.response?.description || e?.message || e);
+      sent = await ctx.reply(base, { parse_mode: "HTML", ...buttons(p.id) });
+    }
 
-      const sent = await ctx.reply(reasonCaption, actionButtons(p.id));
-      const chatId = sent?.chat?.id;
-      const msgId = sent?.message_id;
-      if (chatId && msgId) {
-        cacheSet(`${chatId}:${msgId}`, { reasonCaption, compCaption, perfumeId: p.id });
-      }
+    const chatId = sent?.chat?.id;
+    const msgId = sent?.message_id;
+    if (chatId && msgId) {
+      toggleCacheSet(`${chatId}:${msgId}`, {
+        perfumeId: p.id,
+        isPhoto: !!photo,
+        base,
+        notes,
+        season,
+        view: "base",
+      });
     }
   }
 }
 
 /* =======================
-   BOT HANDLERS
+   SMART SEARCH (Seller)
+======================= */
+async function findPerfumesSmartSeller(rawQuery) {
+  const q = String(rawQuery || "").trim();
+  if (!q) return { mode: "none", perfumes: [] };
+
+  // 1) CODE SEARCH (100% by NAME)
+  if (AI.looksLikeCodeQuery(q)) {
+    const found = AI.findByCodeInName(perfumesAll, q);
+    return { mode: "code", perfumes: found.slice(0, RESULT_MAX) };
+  }
+
+  // 2) EMBEDDINGS candidates
+  const scored = await AI.semanticCandidates({
+    openai,
+    embedModel: EMBED_MODEL,
+    query: q,
+    embeddings: EMBEDDINGS,
+    perfumesById,
+    limitHard: 70,
+  });
+
+  // якщо embeddings нема — fallback in-memory OR (але це гірше)
+  if (!scored.length) {
+    const qq = q.toLowerCase();
+    const fallback = perfumesAll.filter((p) => Object.values(p).join(" ").toLowerCase().includes(qq));
+    return { mode: "fallback", perfumes: fallback.slice(0, RESULT_MAX) };
+  }
+
+  // 3) GPT rerank "як продавець"
+  const candidatePerfumes = scored.map((x) => x.p);
+
+  const topIds = await AI.gptSelectTopIds({
+    openai,
+    chatModel: CHAT_MODEL,
+    userQuery: q,
+    candidates: candidatePerfumes,
+    maxPick: RESULT_MAX,
+  });
+
+  if (topIds.length) {
+    const pick = topIds.map((id) => perfumesById.get(id)).filter(Boolean);
+    return { mode: "ai", perfumes: pick };
+  }
+
+  // Якщо GPT сказав [] — тоді показуємо найкращий 1 по embeddings (щоб не було пусто)
+  // але без “сміття”: тільки top-1
+  return { mode: "semantic_top1", perfumes: [candidatePerfumes[0]].filter(Boolean) };
+}
+
+/* =======================
+   BOT
 ======================= */
 bot.start((ctx) => {
   ctx.reply(
-    "👃 Підбір ароматів (розумний пошук)\n" +
-      "Пиши запит (можна зі статтю):\n" +
-      "• «чоловічий свіжий цитрусовий на літо»\n" +
-      "• «жіночий солодкий ванільний»\n" +
-      "• «унісекс чистий пудровий»\n\n" +
-      "Під кожним ароматом є кнопки «Склад» та «Схоже»."
+    "⚱💨 <b>Підбір ароматів (як консультант)</b>\n\n" +
+      "• Запит природною мовою:\n" +
+      "  <i>солодкі цитрусові чоловічі для літа</i>\n" +
+      "  <i>несолодкий деревний для офісу</i>\n" +
+      "  <i>пудровий чистий як після душу</i>\n\n" +
+      "• Або введи <b>код/номер</b>:\n" +
+      "  <i>77A</i>, <i>601</i>, <i>154</i>, <i>154A/6E</i>, <i>6E</i>\n\n" +
+      "Покажу <b>1–3</b> результати за релевантністю.",
+    { parse_mode: "HTML" }
   );
 });
 
-// Reload embeddings without restarting
 bot.command("reload", (ctx) => {
   EMBEDDINGS = loadEmbeddings();
   EMB_MAP.clear();
@@ -398,132 +257,176 @@ bot.command("reload", (ctx) => {
 });
 
 bot.on("text", async (ctx) => {
-  const q = (ctx.message.text || "").trim();
-  if (!q) return;
-
-  const check = await isPerfumeQuery(q);
-  if (!check.ok) {
-    return ctx.reply(
-      "Ваш запит не по темі підбору аромату. Напишіть, будь ласка, який аромат бажаєте підібрати.\n" +
-        "Наприклад: «чоловічий свіжий цитрусовий на літо», «жіночий солодкий ванільний», «унісекс пудровий»."
-    );
-  }
+  const raw = (ctx.message.text || "").trim();
+  if (!raw) return;
 
   try {
-    const wantedGender = desiredGenderFromQuery(q);
-    let results = [];
+    const { mode, perfumes } = await findPerfumesSmartSeller(raw);
 
-    if (EMBEDDINGS.length > 0 && q.length >= 3) {
-      results = await semanticSearchByQuery(q, 12);
+    if (mode === "code" && !perfumes.length) {
+      return ctx.reply(
+        "❌ Не знайшов такий код у <b>назві</b> (100% збіг).\n" +
+          "Приклади: <i>77A</i>, <i>601</i>, <i>154</i>, <i>154A/6E</i>.",
+        { parse_mode: "HTML" }
+      );
     }
 
-    if (!results.length) {
-      results = keywordSearchStmt.all(q, q, q, q);
+    if (!perfumes.length) {
+      return ctx.reply(
+        "❌ Нічого релевантного не знайшов.\n" +
+          "Спробуй: «чоловічий цитрус літо», «несолодкий деревний», «пудровий чистий»."
+      );
     }
 
-    if (wantedGender) {
-      results = results.filter((p) => inferGender(p) === wantedGender);
-    }
-
-    results = results.slice(0, 5);
-
-    if (!results.length) {
-      return ctx.reply("❌ Нічого не знайшов. Спробуй інші слова/асоціації.");
-    }
-
-    await sendPerfumes(ctx, q, results);
+    await sendPerfumes(ctx, perfumes);
   } catch (e) {
     console.error(e);
     const msg = e?.response?.description || e?.message || "Невідома помилка";
-    ctx.reply(`⚠️ Помилка підбору: ${msg}`);
+    ctx.reply(`⚠️ Помилка: ${msg}`);
   }
 });
 
 bot.on("callback_query", async (ctx) => {
   const data = ctx.callbackQuery?.data || "";
 
-  // ====== SIMILAR ======
+  // TOGGLE
+  if (data.startsWith("tog:")) {
+    const [, what, idStr] = data.split(":");
+    const id = Number(idStr);
+    if (!Number.isFinite(id)) return;
+
+    const chatId = ctx.callbackQuery?.message?.chat?.id;
+    const msgId = ctx.callbackQuery?.message?.message_id;
+    if (!chatId || !msgId) return;
+
+    const key = `${chatId}:${msgId}`;
+    let cached = TOGGLE_CACHE.get(key);
+
+    if (!cached) {
+      const p = perfumesById.get(id);
+      if (!p) {
+        await ctx.answerCbQuery("Не знайшов аромат у БД");
+        return;
+      }
+      cached = {
+        perfumeId: id,
+        isPhoto: !!pickFirstImageUrl(p.photo),
+        base: baseCard(p),
+        notes: notesCard(p),
+        season: seasonCard(p),
+        view: "base",
+      };
+      toggleCacheSet(key, cached);
+    }
+
+    await ctx.answerCbQuery("Ок");
+
+    let nextText = cached.base;
+    let nextView = "base";
+
+    if (what === "notes") {
+      if (cached.view === "notes") {
+        nextText = cached.base;
+        nextView = "base";
+      } else {
+        nextText = cached.notes;
+        nextView = "notes";
+      }
+    }
+
+    if (what === "season") {
+      if (cached.view === "season") {
+        nextText = cached.base;
+        nextView = "base";
+      } else {
+        nextText = cached.season;
+        nextView = "season";
+      }
+    }
+
+    cached.view = nextView;
+    toggleCacheSet(key, cached);
+
+    try {
+      if (cached.isPhoto) {
+        await ctx.editMessageCaption(nextText, { parse_mode: "HTML", ...buttons(id) });
+      } else {
+        await ctx.editMessageText(nextText, { parse_mode: "HTML", ...buttons(id) });
+      }
+    } catch (e) {
+      console.error("edit failed:", e?.response?.description || e?.message || e);
+    }
+    return;
+  }
+
+  // SIMILAR (тепер теж "як продавець", а не просто cosine)
   if (data.startsWith("sim:")) {
     const id = Number(data.split(":")[1]);
     if (!Number.isFinite(id)) return;
 
     try {
-      await ctx.answerCbQuery("Шукаю схожі…");
+      await ctx.answerCbQuery("Підбираю схожі…");
 
-      let results = similarByPerfumeId(id, 12).slice(0, 5);
-      if (!results.length) {
-        return ctx.reply("❌ Не знайшов схожих (немає embedding для цього аромату).");
+      const base = perfumesById.get(id);
+      const baseEmb = EMB_MAP.get(id);
+
+      if (!base || !baseEmb) {
+        await ctx.reply("❌ Немає даних/embedding для цього аромату.");
+        return;
       }
 
-      const base = perfumeByIdStmt.get(id);
-      const baseName = base?.name ? `"${base.name}"` : "обраного аромату";
-      const queryText = `Схожі на ${baseName}`;
+      // 1) cosine candidates
+      const scored = EMBEDDINGS
+        .filter((e) => e.perfume_id !== id)
+        .map((e) => ({
+          id: e.perfume_id,
+          score: AI.cosineSim(baseEmb, e.embedding),
+          p: perfumesById.get(e.perfume_id),
+        }))
+        .filter((x) => x.p)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 60);
 
-      await sendPerfumes(ctx, queryText, results);
-      return;
-    } catch (e) {
-      console.error(e);
-      await ctx.answerCbQuery("Помилка");
-      return ctx.reply("⚠️ Не вдалося знайти схожі. Спробуй ще раз.");
-    }
-  }
-
-  // ====== COMPOSITION IN-PLACE (edit caption) ======
-  if (data.startsWith("comp:")) {
-    const id = Number(data.split(":")[1]);
-    if (!Number.isFinite(id)) return;
-
-    try {
-      await ctx.answerCbQuery("Показую склад…");
-
-      const chatId = ctx.callbackQuery?.message?.chat?.id;
-      const msgId = ctx.callbackQuery?.message?.message_id;
-      if (!chatId || !msgId) return;
-
-      const key = `${chatId}:${msgId}`;
-      let cached = CAPTION_CACHE.get(key);
-
-      if (!cached) {
-        const p = perfumeByIdStmt.get(id);
-        if (!p) return ctx.reply("❌ Не знайшов цей аромат у базі.");
-        cached = {
-          reasonCaption: makeCaptionWithReason(p, ""),
-          compCaption: makeCompositionCaption(p),
-          perfumeId: id,
-        };
-        cacheSet(key, cached);
+      if (!scored.length) {
+        await ctx.reply("❌ Не знайшов схожих.");
+        return;
       }
 
-      await ctx.editMessageCaption(cached.compCaption, { ...actionButtonsBack(id) });
+      // 2) prefilter by gender bucket (щоб не мішало жіночі/чоловічі)
+      const pre = AI.prefilterSimilarCandidates(base, scored).map((x) => x.p);
+
+      // 3) GPT rerank: "схоже на цей аромат"
+      const baseName = AI.stripHtml(base.name || "");
+      const baseFacts = [
+        `Назва: ${baseName}`,
+        `Для кого: ${AI.stripHtml(base.for_whom || base.komu || "")}`,
+        `Тип: ${AI.stripHtml(base.type || "")}`,
+        `Сезон: ${AI.stripHtml(base.season || "")}`,
+        `Ноти: ${AI.stripHtml(base.notes || "")}`,
+        `Опис: ${AI.stripHtml(base.description || "")}`,
+      ].filter(Boolean).join("\n");
+
+      const query = `Підбери максимально схожі на аромат нижче (по ДНК/стилю/нотній ідеї), без випадкових протилежностей.\n\n${baseFacts}`;
+
+      const topIds = await AI.gptSelectTopIds({
+        openai,
+        chatModel: CHAT_MODEL,
+        userQuery: query,
+        candidates: pre,
+        maxPick: RESULT_MAX,
+      });
+
+      const pick = topIds.map((pid) => perfumesById.get(pid)).filter(Boolean);
+
+      // fallback: якщо GPT повернув [], беремо top-3 cosine з pre
+      const finalPick = pick.length ? pick : pre.slice(0, RESULT_MAX);
+
+      await sendPerfumes(ctx, finalPick);
       return;
     } catch (e) {
       console.error(e);
       await ctx.answerCbQuery("Помилка");
-      return;
-    }
-  }
-
-  // ====== BACK (restore GPT reason caption) ======
-  if (data.startsWith("back:")) {
-    const id = Number(data.split(":")[1]);
-    if (!Number.isFinite(id)) return;
-
-    try {
-      await ctx.answerCbQuery("Повертаю…");
-
-      const chatId = ctx.callbackQuery?.message?.chat?.id;
-      const msgId = ctx.callbackQuery?.message?.message_id;
-      if (!chatId || !msgId) return;
-
-      const key = `${chatId}:${msgId}`;
-      const cached = CAPTION_CACHE.get(key);
-      if (!cached) return;
-
-      await ctx.editMessageCaption(cached.reasonCaption, { ...actionButtons(id) });
-      return;
-    } catch (e) {
-      console.error(e);
-      await ctx.answerCbQuery("Помилка");
+      await ctx.reply("⚠️ Не вдалося знайти схожі. Спробуй ще раз.");
       return;
     }
   }
@@ -532,9 +435,7 @@ bot.on("callback_query", async (ctx) => {
 });
 
 bot.launch();
-console.log(
-  `✅ Bot started | embeddings: ${EMBEDDINGS.length} | embed_model: ${EMBED_MODEL} | chat_model: ${CHAT_MODEL} | classify_model: ${CLASSIFY_MODEL}`
-);
+console.log(`✅ Bot started | perfumes: ${perfumesAll.length} | embeddings: ${EMBEDDINGS.length} | embed_model: ${EMBED_MODEL} | chat_model: ${CHAT_MODEL}`);
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));

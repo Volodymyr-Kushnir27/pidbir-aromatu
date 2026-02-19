@@ -8,19 +8,19 @@ const db = new Database(process.env.DB_PATH);
 const MODEL = process.env.EMBED_MODEL || "text-embedding-3-small";
 const BATCH_SIZE = 64;
 
-function stripHtml(s) {
-  return (s || "")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function makePerfumeText(p) {
   return [
     `Назва: ${p.name}`,
-    `Категорії: ${stripHtml(p.categories)}`,
-    `Короткий опис: ${stripHtml(p.short_desc)}`,
-    `Опис: ${stripHtml(p.description)}`
+    `Тип аромату: ${p.type}`,
+    `Для кого: ${p.for_whom}`,
+    `Сезон: ${p.season}`,
+    `Подія: ${p.occasion}`,
+    `Вік: ${p.age}`,
+    `Ноти: ${p.notes}`,
+    `Ключові слова: ${p.keywords}`,
+    `Опис: ${p.description}`,
+    `Версія: ${p.version}`,
+    `Кому: ${p.komu}`
   ].filter(Boolean).join("\n");
 }
 
@@ -34,14 +34,10 @@ async function embedBatch(texts) {
 }
 
 async function main() {
+
   const perfumes = db.prepare(`
-    SELECT id, name, categories, short_desc, description
+    SELECT *
     FROM perfumes
-    WHERE type='variable'
-      AND (
-        (description IS NOT NULL AND TRIM(description) != '')
-        OR (short_desc IS NOT NULL AND TRIM(short_desc) != '')
-      )
   `).all();
 
   console.log(`Perfumes to embed: ${perfumes.length}`);
@@ -61,6 +57,7 @@ async function main() {
     const embeddings = await embedBatch(texts);
 
     const now = new Date().toISOString();
+
     const tx = db.transaction(() => {
       for (let j = 0; j < chunk.length; j++) {
         upsert.run({
@@ -71,17 +68,16 @@ async function main() {
         });
       }
     });
+
     tx();
 
     console.log(`Embedded ${Math.min(i + BATCH_SIZE, perfumes.length)}/${perfumes.length}`);
   }
 
-  const count = db.prepare(`SELECT COUNT(*) AS c FROM perfume_embeddings`).get().c;
-  console.log(`✅ Done. Stored embeddings: ${count}`);
+  console.log("✅ Embeddings ready");
 }
 
 main().catch(err => {
   console.error(err);
   process.exit(1);
 });
-

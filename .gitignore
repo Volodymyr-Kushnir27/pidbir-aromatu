@@ -1,4 +1,6 @@
+cat > .gitignore << 'EOF'
 .env
 node_modules
 *.log
 EOF
+

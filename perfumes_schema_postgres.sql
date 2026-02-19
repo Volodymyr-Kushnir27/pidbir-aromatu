@@ -1,22 +1,48 @@
--- Postgres schema (recommended for production)
+-- =========================
+-- PERFUMES
+-- =========================
+DROP TABLE IF EXISTS perfume_embeddings;
+DROP TABLE IF EXISTS perfumes;
+
 CREATE TABLE perfumes (
-  id BIGINT PRIMARY KEY,
-  type TEXT,
-  sku TEXT,
-  name TEXT NOT NULL,
-  is_recommended BOOLEAN DEFAULT FALSE,
-  short_desc TEXT,
-  description TEXT,
-  categories TEXT,
-  image_url TEXT,
-  external_url TEXT
+  id           BIGSERIAL PRIMARY KEY,
+  photo        TEXT,
+  number_code  TEXT,
+  name         TEXT NOT NULL,
+  premiere     TEXT,
+  type         TEXT,
+  for_whom     TEXT,
+  season       TEXT,
+  occasion     TEXT,
+  age          TEXT,
+  notes        TEXT,
+  description  TEXT,
+  projection   TEXT,
+  keywords     TEXT,
+  version      TEXT,
+  komu         TEXT
 );
 
-CREATE INDEX idx_perfumes_name ON perfumes (name);
-CREATE INDEX idx_perfumes_sku ON perfumes (sku);
-CREATE INDEX idx_perfumes_categories ON perfumes (categories);
+-- Індекси для пошуку (ILIKE/LIKE буде працювати, але без trigram індексації не супер швидко)
+CREATE INDEX idx_perfumes_name       ON perfumes (name);
+CREATE INDEX idx_perfumes_type       ON perfumes (type);
+CREATE INDEX idx_perfumes_for_whom   ON perfumes (for_whom);
+CREATE INDEX idx_perfumes_season     ON perfumes (season);
+CREATE INDEX idx_perfumes_occasion   ON perfumes (occasion);
+CREATE INDEX idx_perfumes_keywords   ON perfumes (keywords);
+CREATE INDEX idx_perfumes_notes      ON perfumes (notes);
 
--- Import CSV (run on the DB server; adjust path and delimiter if needed)
--- COPY perfumes(id,type,sku,name,is_recommended,short_desc,description,categories,image_url,external_url)
--- FROM '/absolute/path/wc-product-export-12-1-2026-1768226025390.csv'
--- WITH (FORMAT csv, HEADER true, DELIMITER ',', QUOTE '"');
+-- =========================
+-- EMBEDDINGS
+-- =========================
+CREATE TABLE perfume_embeddings (
+  id             BIGSERIAL PRIMARY KEY,
+  perfume_id     BIGINT NOT NULL REFERENCES perfumes(id) ON DELETE CASCADE,
+  model          TEXT NOT NULL,
+  embedding_json JSONB NOT NULL,
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  UNIQUE (perfume_id)
+);
+
+CREATE INDEX idx_embeddings_model ON perfume_embeddings (model);

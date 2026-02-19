@@ -11,9 +11,17 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "better-sqlite3": "^12.6.0",
-    "dotenv": "^17.2.3",
-    "openai": "^6.16.0",
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.3.1",
+    "openai": "^6.22.0",
     "telegraf": "^4.16.3"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Volodymyr-Kushnir27/pidbir-aromatu.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Volodymyr-Kushnir27/pidbir-aromatu/issues"
+  },
+  "homepage": "https://github.com/Volodymyr-Kushnir27/pidbir-aromatu#readme"
 }
