@@ -353,26 +353,24 @@ bot.on("callback_query", async (ctx) => {
     }
 
     // SIMILAR
-    if (action === "SIMILAR") {
-      const res = similarPerfumes(perfumeId, 3);
+   if (action === "SIMILAR") {
+  const res = similarPerfumes(perfumeId, 3);
 
-      if (!res.ok) {
-        if (res.reason === "no_embedding") {
-          return ctx.reply(
-            "⚠️ Для цього аромату немає embedding у БД. Треба прогнати індексацію embeddings.",
-          );
-        }
-        return ctx.reply("❌ Не зміг підібрати схожі.");
-      }
-
-      if (!res.items.length) return ctx.reply("❌ Схожих не знайшов.");
-
-      await ctx.reply("✨ Схожі аромати:");
-      for (const p of res.items) {
-        await sendPerfumeCard(ctx, p, { notes: false, season: false });
-      }
-      return;
+  if (!res.ok) {
+    if (res.reason === "no_embeddings_table") {
+      return ctx.reply("⚠️ 'Схоже' поки вимкнено (не згенерована таблиця embeddings).");
     }
+    return ctx.reply("❌ Не зміг підібрати схожі.");
+  }
+
+  if (!res.items.length) return ctx.reply("❌ Схожих не знайшов.");
+
+  await ctx.reply("✨ Схожі аромати:");
+  for (const p of res.items) {
+    await sendPerfumeCard(ctx, p, { notes: false, season: false });
+  }
+  return;
+}
 
     return;
   }

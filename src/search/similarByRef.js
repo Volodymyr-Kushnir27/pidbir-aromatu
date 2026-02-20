@@ -1,3 +1,4 @@
+// src/search/similarByRef.js
 const db = require("../db/catalogDb");
 const { EMBED_MODEL } = require("../config");
 
@@ -15,6 +16,17 @@ function cosineSim(a, b) {
   }
   if (!na || !nb) return 0;
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+function tableExists(name) {
+  try {
+    const r = db.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name=? LIMIT 1`
+    ).get(name);
+    return !!r;
+  } catch {
+    return false;
+  }
 }
 
 function getEmbedding(perfumeId) {
@@ -42,15 +54,19 @@ function getPerfumesByIds(ids) {
   const placeholders = ids.map(() => "?").join(",");
   return db.prepare(`
     SELECT
-      id, photo, number_code, name, premiere, type, for_whom, season, occasion, age, notes, keywords, description, projection, version, komu
+      id, photo, number_code, name, type, for_whom, season, occasion, age, notes, keywords, version, description
     FROM perfumes
     WHERE id IN (${placeholders})
   `).all(...ids);
 }
 
 function similarPerfumes(perfumeId, limit = 3) {
+  if (!tableExists("perfume_embeddings")) {
+    return { ok: false, reason: "no_embeddings_table", items: [] };
+  }
+
   const refVec = getEmbedding(perfumeId);
-  if (!refVec) return { ok: false, reason: "no_embedding", items: [] };
+  if (!refVec) return { ok: false, reason: "no_embedding_for_ref", items: [] };
 
   const all = getAllEmbeddings();
   const scored = [];

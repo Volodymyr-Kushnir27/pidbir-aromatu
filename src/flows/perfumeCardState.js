@@ -1,23 +1,46 @@
-// key: chatId:messageId:perfumeId -> { notes:boolean, season:boolean }
-const state = new Map();
+// src/flows/perfumeCardState.js
+// Зберігає для кожного повідомлення-картки які блоки "відкриті"
+// key = `${chatId}:${messageId}` -> { perfumeId, notes: bool, season: bool }
 
-function key(chatId, messageId, perfumeId) {
-  return `${chatId}:${messageId}:${perfumeId}`;
+const map = new Map();
+
+function key(chatId, messageId) {
+  return `${chatId}:${messageId}`;
 }
 
-function getState(chatId, messageId, perfumeId) {
-  return state.get(key(chatId, messageId, perfumeId)) || { notes: false, season: false };
+function get(chatId, messageId) {
+  return map.get(key(chatId, messageId)) || null;
 }
 
-function setState(chatId, messageId, perfumeId, next) {
-  state.set(key(chatId, messageId, perfumeId), next);
+function set(chatId, messageId, state) {
+  map.set(key(chatId, messageId), state);
+  return state;
 }
 
-function toggle(chatId, messageId, perfumeId, field) {
-  const cur = getState(chatId, messageId, perfumeId);
-  const next = { ...cur, [field]: !cur[field] };
-  setState(chatId, messageId, perfumeId, next);
-  return next;
+function remove(chatId, messageId) {
+  map.delete(key(chatId, messageId));
 }
 
-module.exports = { getState, setState, toggle };
+function toggle(chatId, messageId, perfumeId, field /* "notes" | "season" */) {
+  const k = key(chatId, messageId);
+  const cur = map.get(k);
+
+  // якщо це інший perfumeId — починаємо з дефолта
+  const base =
+    cur && cur.perfumeId === perfumeId
+      ? { ...cur }
+      : { perfumeId, notes: false, season: false };
+
+  if (field === "notes") base.notes = !base.notes;
+  if (field === "season") base.season = !base.season;
+
+  map.set(k, base);
+  return base;
+}
+
+module.exports = {
+  get,
+  set,
+  remove,
+  toggle,
+};

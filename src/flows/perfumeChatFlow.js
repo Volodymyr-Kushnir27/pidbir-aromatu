@@ -1,14 +1,18 @@
 // src/flows/perfumeChatFlow.js
-const { findPerfumeByCodeOrDigits } = require("../search/catalogRepo");
-const { retrieveCandidatesEmbeddings } = require("../search/retrieveCandidatesEmbeddings");
+const { searchPerfumesSmart, extractNumberCode, findPerfumesByCodeOrDigits } = require("../search/catalogRepo");
 const { sendPerfumeCard } = require("./sendPerfumeCard");
 
-// pick-mode state: tgId -> true/false
-const pickMode = new Map();
+// Прапор режиму підбору для кожного tgId
+const pickMode = new Map(); // tgId -> true/false
 
 function isPickMode(ctx) {
   const tgId = ctx.from?.id;
   return !!(tgId && pickMode.get(tgId));
+}
+
+function enablePickMode(ctx) {
+  const tgId = ctx.from?.id;
+  if (tgId) pickMode.set(tgId, true);
 }
 
 function disablePickMode(ctx) {
@@ -16,25 +20,18 @@ function disablePickMode(ctx) {
   if (tgId) pickMode.delete(tgId);
 }
 
-async function onUserPickAction(ctx) {
-  const tgId = ctx.from?.id;
-  if (!tgId) return;
-  pickMode.set(tgId, true); // ✅ тільки вмикаємо, без повідомлень/кнопок
-}
+// Викликається з кнопки/меню або автоматично при вході продавця
+async function onUserPickAction(ctx, { silent = false } = {}) {
+  enablePickMode(ctx);
 
-// ✅ локальна витяжка коду: 77A/77А або 77
-function extractCodeLocal(text) {
-  const t = String(text || "").toUpperCase();
-
-  // 77A / 77А
-  let m = t.match(/\b(\d{1,3}\s*[A-ZА-Я])\b/u);
-  if (m) return m[1].replace(/\s+/g, "");
-
-  // 77
-  m = t.match(/\b(\d{1,3})\b/u);
-  if (m) return m[1];
-
-  return null;
+  if (!silent) {
+    await ctx.reply(
+      "✅ Режим підбору активний.\n" +
+      "Можеш ввести:\n" +
+      "- код парфуму: 77A або 60Е\n" +
+      "- або запит словами: солодкий цитрус на літо\n"
+    );
+  }
 }
 
 async function onUserText(ctx) {
@@ -43,50 +40,54 @@ async function onUserText(ctx) {
   const text = String(ctx.message?.text || "").trim();
   if (!text) return true;
 
-  // 1) Пошук по коду/номеру
-  const code = extractCodeLocal(text);
+  // 1) Якщо користувач вводить КОД/НОМЕР — віддаємо ВСІ збіги
+  const code = extractNumberCode(text);
   if (code) {
-    const perfume = findPerfumeByCodeOrDigits(code);
-
-    if (!perfume) {
-      await ctx.reply(`❌ Не знайшов у базі код: ${code}`);
+    const items = findPerfumesByCodeOrDigits(code, { limit: 10 });
+    if (!items.length) {
+      await ctx.reply(`❌ Не знайшов у базі код/номер: ${code}`);
       return true;
     }
 
-    await sendPerfumeCard(ctx, perfume, { notes: false, season: false });
-    return true;
+    // Якщо один — одразу картка
+    if (items.length === 1) {
+      await sendPerfumeCard(ctx, items[0], { notes: false, season: false });
+      return true;
+    }
+
+   await ctx.reply(`🔎 Знайшов ${items.length} варіант(и) по "${code}". Показую до 3:`);
+
+for (let i = 0; i < Math.min(3, items.length); i++) {
+  await sendPerfumeCard(ctx, items[i], { notes: false, season: false });
+}
+
+return true;
   }
 
-  // 2) Підбір по опису (embeddings)
-  try {
-    const items = await retrieveCandidatesEmbeddings({
-      queryText: text,
-      limit: 5,
-      filters: {},
-    });
+  // 2) Інакше — “розумний” пошук по БД (LLM тільки парсить, НЕ вигадує)
+  const res = await searchPerfumesSmart(text, { limit: 5 });
 
-    if (!items || !items.length) {
-      await ctx.reply("❌ Нічого схожого не знайшов. Спробуй інший опис або введи код (77A).");
-      return true;
-    }
-
-    await ctx.reply("✨ Ось що підійшло з бази:");
-    for (const p of items) {
-      await sendPerfumeCard(ctx, p, { notes: false, season: false });
-    }
-    return true;
-  } catch (e) {
-    console.error("retrieveCandidatesEmbeddings error:", e?.message);
+  if (!res.items || !res.items.length) {
     await ctx.reply(
-      "⚠️ Підбір по опису тимчасово недоступний (embeddings).\n" +
-      "Введи код (77A) або попроси адміна прогнати індексацію embeddings."
+      "❌ Нічого точного не знайшов у базі.\n" +
+      "Спробуй уточнити: стать/сезон/тип/ноти.\n" +
+      "Наприклад: 'чоловічий, зима, алкогольні ноти' або 'унісекс цитрус на літо'."
     );
     return true;
   }
+
+  // Показуємо результати
+  for (const p of res.items) {
+    await sendPerfumeCard(ctx, p, { notes: false, season: false });
+  }
+
+  return true;
 }
 
 module.exports = {
   onUserPickAction,
   onUserText,
+  enablePickMode,
   disablePickMode,
+  isPickMode,
 };

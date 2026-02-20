@@ -46,14 +46,11 @@ function perfumeCardKeyboard(perfumeId) {
     [Markup.button.callback("✨ Схоже", `P:SIMILAR:${perfumeId}`)],
   ]);
 }
-
-module.exports.perfumeCardKeyboard = perfumeCardKeyboard;
-
-
 module.exports = {
   adminMenuKeyboard,
   userMenuKeyboard,
   shareContactKeyboard,
   backHomeKeyboard,
-  exitPickKeyboard
+  exitPickKeyboard,
+  perfumeCardKeyboard,
 };
