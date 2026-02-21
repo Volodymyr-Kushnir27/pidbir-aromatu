@@ -15,6 +15,7 @@ const { getRole } = require("./middleware/auth");
 const adminsStore = require("./storage/adminsStore");
 const usersStore = require("./storage/usersStore");
 
+
 const {
   adminMenuKeyboard,
   userMenuKeyboard,
@@ -39,7 +40,7 @@ const {
 const { getPerfumeById } = require("./search/catalogRepo");
 const cardState = require("./flows/perfumeCardState");
 const { buildPerfumeCaption } = require("./ui/formatPerfumeCard");
-const { similarPerfumes } = require("./search/similarByRef");
+const { similarPerfumesByWeight } = require("./search/similarByWeight");
 const { sendPerfumeCard } = require("./flows/sendPerfumeCard");
 
 if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
@@ -352,20 +353,19 @@ bot.on("callback_query", async (ctx) => {
       return;
     }
 
-    // SIMILAR
-   if (action === "SIMILAR") {
-  const res = similarPerfumes(perfumeId, 3);
+ // SIMILAR (без embeddings, по вагам)
+if (action === "SIMILAR") {
+  const res = similarPerfumesByWeight(perfumeId, 3);
 
   if (!res.ok) {
-    if (res.reason === "no_embeddings_table") {
-      return ctx.reply("⚠️ 'Схоже' поки вимкнено (не згенерована таблиця embeddings).");
-    }
-    return ctx.reply("❌ Не зміг підібрати схожі.");
+    return ctx.reply("❌ Не зміг підібрати схожі (перевір логіку similarByWeight).");
   }
 
-  if (!res.items.length) return ctx.reply("❌ Схожих не знайшов.");
+  if (!res.items.length) {
+    return ctx.reply("❌ Схожих не знайшов за правилами (ваги/фільтри).");
+  }
 
-  await ctx.reply("✨ Схожі аромати:");
+  await ctx.reply("✨ Схожі аромати (топ-3):");
   for (const p of res.items) {
     await sendPerfumeCard(ctx, p, { notes: false, season: false });
   }

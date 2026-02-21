@@ -46,6 +46,7 @@ function perfumeCardKeyboard(perfumeId) {
     [Markup.button.callback("✨ Схоже", `P:SIMILAR:${perfumeId}`)],
   ]);
 }
+
 module.exports = {
   adminMenuKeyboard,
   userMenuKeyboard,
