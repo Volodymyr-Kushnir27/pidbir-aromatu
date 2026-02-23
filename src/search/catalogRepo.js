@@ -1,25 +1,10 @@
 // src/search/catalogRepo.js
 const db = require("../db/catalogDb");
-
-let openai = null;
-const CHAT_MODEL = process.env.CHAT_MODEL || "gpt-4o-mini";
-
-// Якщо у вас є клієнт OpenAI — підключимо тільки як "парсер запиту" (НЕ генерація парфумів)
-try {
-  ({ openai } = require("../llm/client"));
-} catch {}
+const { chatJSONSchema } = require("../llm/client");
 
 /* =========================
-   Helpers
+   Text helpers
 ========================= */
-function safeJsonParse(s) {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
-
 function normText(s) {
   return String(s || "")
     .toLowerCase()
@@ -27,7 +12,28 @@ function normText(s) {
     .trim();
 }
 
-// Нормалізуємо код і прибираємо проблеми кирилиця/латинка
+function capFirst(s) {
+  const t = String(s || "");
+  if (!t) return t;
+  return t[0].toUpperCase() + t.slice(1);
+}
+
+/**
+ * SQLite case-insensitive для UA працює погано.
+ * Тому під SQL даємо кілька варіантів регістру.
+ * А фінальне ранжування робимо в JS (Unicode ok).
+ */
+function termVariants(term) {
+  const t = String(term || "").trim();
+  if (!t) return [];
+  const lower = t.toLowerCase();
+  const set = new Set([t, lower, t.toUpperCase(), capFirst(lower)]);
+  return [...set].filter(Boolean).slice(0, 4);
+}
+
+/* =========================
+   Code helpers
+========================= */
 function normalizeCode(code) {
   if (!code) return null;
 
@@ -39,7 +45,7 @@ function normalizeCode(code) {
     .replace(/В/g, "B")
     .replace(/С/g, "C")
     .replace(/Е/g, "E")
-    .replace(/Є/g, "E") // важливо для укр.
+    .replace(/Є/g, "E")
     .replace(/Н/g, "H")
     .replace(/І/g, "I")
     .replace(/К/g, "K")
@@ -89,23 +95,53 @@ function extractNumberCode(text) {
 }
 
 /* =========================
-   SQL select
+   Adaptive SELECT (schema-safe)
 ========================= */
+let _perfumeColsCache = null;
+
+function getPerfumeColumns() {
+  if (_perfumeColsCache) return _perfumeColsCache;
+  try {
+    const rows = db.prepare(`PRAGMA table_info('perfumes')`).all();
+    _perfumeColsCache = new Set(rows.map((r) => String(r.name)));
+  } catch {
+    _perfumeColsCache = new Set();
+  }
+  return _perfumeColsCache;
+}
+
+// Поля, які хочемо мати у результаті (якщо нема в БД → NULL AS field)
+const PERFUME_FIELDS = [
+  "id",
+  "photo",
+  "number_code",
+  "name",
+  "premiere",
+  "type",
+  "for_whom",
+  "season",
+  "occasion",
+  "age",
+  "notes",
+  "keywords",
+  "version",
+  "description",
+  "projection",
+  "komu",
+];
+
+function selectFieldOrNull(field, cols) {
+  return cols.has(field) ? field : `NULL AS ${field}`;
+}
+
 function perfumeSelectSQL() {
+  const cols = getPerfumeColumns();
+  const selectList = PERFUME_FIELDS.map((f) => selectFieldOrNull(f, cols)).join(
+    ",\n      ",
+  );
   return `
     SELECT
-      id,
-      photo,
-      name,
-      type,
-      for_whom,
-      season,
-      occasion,
-      age,
-      notes,
-      keywords,
-      version,
-      description
+      ${selectList}
     FROM perfumes
   `;
 }
@@ -120,19 +156,48 @@ function getPerfumeById(id) {
     ${perfumeSelectSQL()}
     WHERE id = ?
     LIMIT 1
-  `
+  `,
     )
     .get(id);
 }
 
 /* =========================
+   Find by name (reference lookup)
+========================= */
+function findPerfumesByNameLike(nameOrPart, { limit = 10 } = {}) {
+  const q = normText(nameOrPart);
+  if (!q) return [];
+
+  const tokens = q
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((x) => x.length >= 3)
+    .slice(0, 6);
+
+  if (!tokens.length) return [];
+
+  // SQL без LOWER, даємо варіанти регістру
+  const wh = [];
+  const params = [];
+  for (const t of tokens) {
+    const vars = termVariants(t);
+    const ors = vars.map(() => `COALESCE(name,'') LIKE ?`).join(" OR ");
+    wh.push(`(${ors})`);
+    for (const v of vars) params.push(`%${v}%`);
+  }
+
+  const sql = `
+    ${perfumeSelectSQL()}
+    WHERE ${wh.join(" AND ")}
+    ORDER BY LENGTH(COALESCE(name,'')) ASC
+    LIMIT ?
+  `;
+
+  return db.prepare(sql).all(...params, limit) || [];
+}
+
+/* =========================
    CODE search returning MANY
 ========================= */
-/**
- * Повертає список збігів (не 1!)
- * - якщо input "60" -> знайде "60A", "60E/149A" тощо (через name)
- * - якщо input "60E" -> знайде всі де є "60E" / "60Е"
- */
 function findPerfumesByCodeOrDigits(input, { limit = 10 } = {}) {
   const raw = String(input || "").trim();
   if (!raw) return [];
@@ -146,7 +211,6 @@ function findPerfumesByCodeOrDigits(input, { limit = 10 } = {}) {
   const latin = norm;
   const cyr = toCyrillicLookalikes(latin);
 
-  // Шукаємо по NAME (бо у вас коди часто зашиті в name типу "60E/149A ...")
   if (isCode) {
     const rows = db
       .prepare(
@@ -156,7 +220,7 @@ function findPerfumesByCodeOrDigits(input, { limit = 10 } = {}) {
          OR UPPER(REPLACE(COALESCE(name,''),' ','')) LIKE ?
       ORDER BY id ASC
       LIMIT ?
-    `
+    `,
       )
       .all(`%${latin}%`, `%${cyr}%`, limit);
 
@@ -164,21 +228,15 @@ function findPerfumesByCodeOrDigits(input, { limit = 10 } = {}) {
   }
 
   if (isDigitsOnly) {
-    // digits: "60" має знайти і "60A", і "60E/149A", але не ловити "160"
-    // Робимо точніші маски:
-    // - початок рядка: "60"
-    // - або " 60"
-    // - або "60/" (типу 60E/149A)
-    // - або "60A"/"60E" etc (через contains, але з пріоритетом)
     const rows = db
       .prepare(
         `
       ${perfumeSelectSQL()}
       WHERE
-        UPPER(COALESCE(name,'')) LIKE ?            -- "60..."
-        OR UPPER(COALESCE(name,'')) LIKE ?        -- "... 60..."
-        OR UPPER(COALESCE(name,'')) LIKE ?        -- "...60/..."
-        OR UPPER(COALESCE(name,'')) LIKE ?        -- "...60A..."
+        UPPER(COALESCE(name,'')) LIKE ?
+        OR UPPER(COALESCE(name,'')) LIKE ?
+        OR UPPER(COALESCE(name,'')) LIKE ?
+        OR UPPER(COALESCE(name,'')) LIKE ?
       ORDER BY
         CASE
           WHEN UPPER(COALESCE(name,'')) LIKE ? THEN 0
@@ -187,7 +245,7 @@ function findPerfumesByCodeOrDigits(input, { limit = 10 } = {}) {
         END,
         id ASC
       LIMIT ?
-    `
+    `,
       )
       .all(
         `${latin}%`,
@@ -196,7 +254,7 @@ function findPerfumesByCodeOrDigits(input, { limit = 10 } = {}) {
         `%${latin}%`,
         `${latin}%`,
         `% ${latin}%`,
-        limit
+        limit,
       );
 
     return rows || [];
@@ -206,69 +264,79 @@ function findPerfumesByCodeOrDigits(input, { limit = 10 } = {}) {
 }
 
 /* =========================
-   LLM parsing (only to JSON)
+   LLM parsing (Responses JSON Schema)
 ========================= */
-async function llmParseQueryToJSON(userText) {
-  if (!openai) return null;
+const SmartParseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "name_terms",
+    "for_whom",
+    "season",
+    "type",
+    "age",
+    "notes",
+    "keywords",
+    "version_terms",
+  ],
+  properties: {
+    name_terms: { type: "array", items: { type: "string" }, maxItems: 12 },
+    for_whom: {
+      anyOf: [
+        { type: "string", enum: ["жіночий", "чоловічий", "унісекс"] },
+        { type: "null" },
+      ],
+    },
+    season: { type: "array", items: { type: "string" }, maxItems: 12 },
+    type: { type: "array", items: { type: "string" }, maxItems: 12 },
+    age: { type: "array", items: { type: "string" }, maxItems: 12 },
+    notes: { type: "array", items: { type: "string" }, maxItems: 12 },
+    keywords: { type: "array", items: { type: "string" }, maxItems: 12 },
+    version_terms: { type: "array", items: { type: "string" }, maxItems: 12 },
+  },
+};
 
-  const sys = `
-You are a parser for a perfume store assistant. Convert user request into JSON for SQL search.
-Do NOT invent perfumes. Do NOT output explanations. Return ONLY valid JSON.
-
-Schema:
-{
-  "name_terms": string[],
-  "for_whom": "жіночий"|"чоловічий"|"унісекс"|null,
-  "season": string[],
-  "type": string[],
-  "age": string[],
-  "notes": string[],
-  "keywords": string[],
-  "version_terms": string[]
+function cleanArr(a) {
+  if (!Array.isArray(a)) return [];
+  return [...new Set(a.map((x) => normText(x)).filter(Boolean))].slice(0, 12);
 }
 
-Rules:
-- If user asks "алкогольні ноти", expand to common alcohol-related notes (UA/RU/EN).
-- If user asks "цитрус", expand to citrus notes.
-- Max 12 items per array. Prefer Ukrainian.
-`;
+async function llmParseQueryToJSON(userText) {
+  const sys = `
+Ти — парсер запиту для пошуку парфумів у SQLite.
+Поверни ТІЛЬКИ JSON за схемою (без пояснень).
+НЕ вигадуй парфуми. Працюй тільки з ознаками (стать/сезон/тип/ноти/ключові слова).
 
-  const resp = await openai.chat.completions.create({
-    model: CHAT_MODEL,
+Правила:
+- максимум 12 елементів у масивах
+- перевага українській
+- якщо користувач каже "цитрус" — додай: лимон, бергамот, мандарин, грейпфрут, лайм, апельсин
+- якщо каже "алкогольні ноти" — додай: віскі, ром, коньяк, джин, лікер, шампанське, бренді
+- якщо користувач пише "коньяк" — додай також: cognac, brandy (на випадок EN у базі)
+- якщо пише "ромашка" — додай: chamomile
+- якщо пише "груша" — додай: pear
+`.trim();
+
+  const obj = await chatJSONSchema(sys, String(userText || "").slice(0, 2000), {
+    name: "smart_query",
+    schema: SmartParseSchema,
     temperature: 0.1,
-    messages: [
-      { role: "system", content: sys.trim() },
-      { role: "user", content: String(userText || "").slice(0, 2000) },
-    ],
   });
 
-  const txt = resp.choices?.[0]?.message?.content || "";
-  const parsed = safeJsonParse(txt);
-  if (!parsed || typeof parsed !== "object") return null;
-
-  const cleanArr = (a) =>
-    Array.isArray(a)
-      ? [...new Set(a.map((x) => normText(x)).filter(Boolean))].slice(0, 12)
-      : [];
-
-  const fw = parsed.for_whom ? normText(parsed.for_whom) : null;
-  const forWhom =
-    fw === "жіночий" || fw === "чоловічий" || fw === "унісекс" ? fw : null;
-
   return {
-    name_terms: cleanArr(parsed.name_terms),
-    for_whom: forWhom,
-    season: cleanArr(parsed.season),
-    type: cleanArr(parsed.type),
-    age: cleanArr(parsed.age),
-    notes: cleanArr(parsed.notes),
-    keywords: cleanArr(parsed.keywords),
-    version_terms: cleanArr(parsed.version_terms),
+    name_terms: cleanArr(obj.name_terms),
+    for_whom: obj.for_whom ?? null,
+    season: cleanArr(obj.season),
+    type: cleanArr(obj.type),
+    age: cleanArr(obj.age),
+    notes: cleanArr(obj.notes),
+    keywords: cleanArr(obj.keywords),
+    version_terms: cleanArr(obj.version_terms),
   };
 }
 
 /* =========================
-   Heuristic parse (no OpenAI)
+   Heuristic parse fallback
 ========================= */
 function heuristicParse(userText) {
   const t = normText(userText);
@@ -284,122 +352,66 @@ function heuristicParse(userText) {
     version_terms: [],
   };
 
-  // стать
   if (/\bунісекс\b/.test(t)) out.for_whom = "унісекс";
   else if (/\bжіноч(ий|а)\b/.test(t)) out.for_whom = "жіночий";
   else if (/\bчоловіч(ий|а)\b/.test(t)) out.for_whom = "чоловічий";
 
-  // сезони
   for (const s of ["весна", "літо", "осінь", "зима"]) {
     if (t.includes(s)) out.season.push(s);
   }
 
-  // алкоголь (мінімально, але реально корисно)
-  if (t.includes("алког") || t.includes("vodka") || t.includes("водка") || t.includes("горіл")) {
-    out.notes.push(
-      "алкоголь",
-      "горілка",
-      "водка",
-      "vodka",
-      "віскі",
-      "whisky",
-      "whiskey",
-      "ром",
-      "rum",
-      "коньяк",
-      "cognac",
-      "бренді",
-      "brandy",
-      "джин",
-      "gin",
-      "лікер",
-      "liqueur",
-      "вино",
-      "wine",
-      "шампанське",
-      "champagne",
-      "бурбон",
-      "bourbon"
-    );
-  }
+  // прості синоніми (на випадок, якщо LLM не відпрацював)
+  if (t.includes("коньяк")) out.notes.push("коньяк", "cognac", "brandy", "бренді");
+  if (t.includes("ромашк")) out.notes.push("ромашка", "chamomile");
+  if (t.includes("груш")) out.notes.push("груша", "pear");
 
-  // цитрус
-  if (t.includes("цитрус")) {
-    out.notes.push(
-      "лимон",
-      "lemon",
-      "апельсин",
-      "orange",
-      "бергамот",
-      "bergamot",
-      "мандарин",
-      "tangerine",
-      "грейпфрут",
-      "grapefruit",
-      "лайм",
-      "lime"
-    );
-  }
+  const tokens = t
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((x) => x.length >= 3);
 
-  // ключові слова з тексту (щоб хоча б щось шукало без LLM)
-  const tokens = t.split(/[^\p{L}\p{N}]+/u).filter((x) => x.length >= 3);
   out.keywords = [...new Set(tokens)].slice(0, 12);
-
   return out;
 }
 
 /* =========================
-   Gender filtering rules
+   Gender filtering rules (JS Unicode ok)
 ========================= */
-function genderAllowed(rowForWhomRaw, queryForWhom /* "чоловічий"/"жіночий"/"унісекс"/null */) {
-  if (!queryForWhom) return true; // якщо не вказано стать — не ріжемо
+function genderAllowed(rowForWhomRaw, queryForWhom) {
+  if (!queryForWhom) return true;
 
   const fw = normText(rowForWhomRaw);
-
   const isMale = fw.includes("чолов");
   const isFemale = fw.includes("жін");
   const isUnisex = fw.includes("унісекс") || fw.includes("unisex");
 
-  if (queryForWhom === "унісекс") {
-    return isUnisex;
-  }
-
-  if (queryForWhom === "чоловічий") {
-    return isMale || isUnisex;
-  }
-
-  if (queryForWhom === "жіночий") {
-    return isFemale || isUnisex;
-  }
-
+  if (queryForWhom === "унісекс") return isUnisex;
+  if (queryForWhom === "чоловічий") return isMale || isUnisex;
+  if (queryForWhom === "жіночий") return isFemale || isUnisex;
   return true;
 }
 
 /* =========================
-   Candidate SQL building
+   Candidate SQL building (NO LOWER)
 ========================= */
 function buildCandidateSQL(parsed) {
-  // Пошук по полях у вашому пріоритеті (але через OR, щоб не душити видачу)
-  // Потім відранжуємо scoreRow()
   const wh = [];
   const params = [];
 
   const likeAny = (field, terms) => {
     if (!terms || !terms.length) return;
-    const ors = terms.map(() => `LOWER(COALESCE(${field},'')) LIKE ?`).join(" OR ");
-    wh.push(`(${ors})`);
-    for (const term of terms) params.push(`%${term}%`);
+
+    const ors = [];
+    for (const term of terms) {
+      const vars = termVariants(term);
+      for (const v of vars) {
+        ors.push(`COALESCE(${field},'') LIKE ?`);
+        params.push(`%${v}%`);
+      }
+    }
+    if (ors.length) wh.push(`(${ors.join(" OR ")})`);
   };
 
-  // пріоритети (запити)
   likeAny("name", parsed.name_terms);
-
-  // стать як candidate (але фінально фільтруємо в JS жорстко)
-  if (parsed.for_whom) {
-    wh.push(`LOWER(COALESCE(for_whom,'')) LIKE ?`);
-    params.push(`%${parsed.for_whom}%`);
-  }
-
   likeAny("season", parsed.season);
   likeAny("notes", parsed.notes);
   likeAny("keywords", parsed.keywords);
@@ -407,25 +419,24 @@ function buildCandidateSQL(parsed) {
   likeAny("type", parsed.type);
   likeAny("age", parsed.age);
 
-  // ДОДАЛИ description в retrieval
-  likeAny("description", parsed.notes);     // ноти можуть бути в описі
-  likeAny("description", parsed.keywords);  // і ключові слова також
+  // notes/keywords можуть бути в description
+  likeAny("description", parsed.notes);
+  likeAny("description", parsed.keywords);
 
   const where = wh.length ? `WHERE ${wh.join(" OR ")}` : "";
   const sql = `
     ${perfumeSelectSQL()}
     ${where}
-    LIMIT 400
+    LIMIT 900
   `;
 
   return { sql, params };
 }
 
 /* =========================
-   Scoring
+   Scoring (JS, Unicode ok)
 ========================= */
 function scoreRow(row, parsed) {
-  // weights: ваш пріоритет (назва -> ... -> вік) + description=6 + notes=6
   const W = {
     name: 10,
     description: 6,
@@ -462,65 +473,67 @@ function scoreRow(row, parsed) {
 
   let s = 0;
 
-  // name
   s += W.name * hitCount(fields.name, parsed.name_terms);
-
-  // for_whom (точне попадання)
   if (parsed.for_whom && fields.for_whom.includes(parsed.for_whom)) s += W.for_whom;
-
-  // season
   s += W.season * hitCount(fields.season, parsed.season);
 
-  // notes (плюс у description, бо часто там пишуть "пряно-алкогольний акцент")
-  s += W.notes * hitCount(fields.notes, parsed.notes);
+  const notesHits = hitCount(fields.notes, parsed.notes);
+  s += W.notes * notesHits;
   s += Math.floor(W.notes / 2) * hitCount(fields.description, parsed.notes);
 
-  // keywords
   s += W.keywords * hitCount(fields.keywords, parsed.keywords);
-
-  // version
   s += W.version * hitCount(fields.version, parsed.version_terms);
-
-  // type
   s += W.type * hitCount(fields.type, parsed.type);
-
-  // age
   s += W.age * hitCount(fields.age, parsed.age);
 
-  // description (окремо)
   s += W.description * hitCount(fields.description, parsed.keywords);
-
-  // бонус: якщо name містить keywords
   s += 1 * hitCount(fields.name, parsed.keywords);
+
+  // штраф: просили ноти, а їх взагалі нема в записі
+  if (parsed.notes?.length && notesHits === 0) s -= 10;
 
   return s;
 }
 
 /* =========================
-   Main Smart Search
+   Main Smart Search (SQL + fallback)
 ========================= */
 async function searchPerfumesSmart(userText, { limit = 5 } = {}) {
   const text = String(userText || "").trim();
   if (!text) return { mode: "smart", items: [], parsed: null };
 
-  // 0) code short-circuit: якщо є код/номер — повертаємо всі збіги
+  // 0) code shortcut
   const code = extractNumberCode(text);
   if (code) {
     const items = findPerfumesByCodeOrDigits(code, { limit: Math.max(limit, 10) });
-    if (items.length) {
-      return { mode: "code", items, parsed: { code } };
-    }
+    if (items.length) return { mode: "code", items, parsed: { code } };
   }
 
-  // 1) parsed query
-  let parsed = await llmParseQueryToJSON(text);
+  // 1) parse
+  let parsed = null;
+  try {
+    parsed = await llmParseQueryToJSON(text);
+  } catch {
+    parsed = null;
+  }
   if (!parsed) parsed = heuristicParse(text);
 
-  // 2) candidates from DB
-  const { sql, params } = buildCandidateSQL(parsed);
-  const rows = db.prepare(sql).all(...params);
+  // 2) candidates (attempt 1)
+  let rows = [];
+  try {
+    const { sql, params } = buildCandidateSQL(parsed);
+    rows = db.prepare(sql).all(...params);
+  } catch {
+    rows = [];
+  }
 
-  // 3) rank + strict gender filtering
+  // 2.5) fallback pool (bypass SQLite UA case issues)
+  if (!rows.length) {
+    // беремо широкий пул, щоб JS міг знайти збіги по UA
+    rows = db.prepare(`${perfumeSelectSQL()} LIMIT 1500`).all();
+  }
+
+  // 3) rank
   const scored = rows
     .filter((r) => genderAllowed(r.for_whom, parsed.for_whom))
     .map((r) => ({ r, score: scoreRow(r, parsed) }))
@@ -538,6 +551,7 @@ async function searchPerfumesSmart(userText, { limit = 5 } = {}) {
 module.exports = {
   // базові
   getPerfumeById,
+  findPerfumesByNameLike,
 
   // code helpers
   extractNumberCode,

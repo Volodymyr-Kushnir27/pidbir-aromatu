@@ -1,13 +1,23 @@
+// src/search/retrieveCandidatesEmbeddings.js
 const db = require("../db/catalogDb");
 const { openai } = require("../llm/client");
 const { EMBED_MODEL } = require("../config");
 
+/* =========================
+   Helpers
+========================= */
 function safeJsonParse(s) {
-  try { return JSON.parse(s); } catch { return null; }
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
 }
 
 function cosineSim(a, b) {
-  let dot = 0, na = 0, nb = 0;
+  let dot = 0,
+    na = 0,
+    nb = 0;
   const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) {
     dot += a[i] * b[i];
@@ -26,25 +36,59 @@ async function embedText(text) {
   return res.data[0].embedding;
 }
 
+/* =========================
+   Adaptive select for perfumes alias "p"
+========================= */
+let _perfumeColsCache = null;
+
+function getPerfumeColumns() {
+  if (_perfumeColsCache) return _perfumeColsCache;
+  try {
+    const rows = db.prepare(`PRAGMA table_info('perfumes')`).all();
+    _perfumeColsCache = new Set(rows.map((r) => String(r.name)));
+  } catch {
+    _perfumeColsCache = new Set();
+  }
+  return _perfumeColsCache;
+}
+
+const PERFUME_FIELDS = [
+  "id",
+  "photo",
+  "number_code",
+  "name",
+  "premiere",
+  "type",
+  "for_whom",
+  "season",
+  "occasion",
+  "age",
+  "notes",
+  "keywords",
+  "description",
+  "projection",
+  "version",
+  "komu",
+];
+
+function selectFieldOrNull(alias, field, cols) {
+  return cols.has(field) ? `${alias}.${field} AS ${field}` : `NULL AS ${field}`;
+}
+
+function perfumeSelectList(alias = "p") {
+  const cols = getPerfumeColumns();
+  return PERFUME_FIELDS.map((f) => selectFieldOrNull(alias, f, cols)).join(
+    ",\n      ",
+  );
+}
+
+/* =========================
+   Load candidates
+========================= */
 function loadCandidatesFromDb({ forWhomLike, seasonLike, occasionLike } = {}) {
   const sql = `
     SELECT
-      p.id,
-      p.photo,
-      p.number_code,
-      p.name,
-      p.premiere,
-      p.type,
-      p.for_whom,
-      p.season,
-      p.occasion,
-      p.age,
-      p.notes,
-      p.keywords,
-      p.description,
-      p.projection,
-      p.version,
-      p.komu,
+      ${perfumeSelectList("p")},
       e.embedding_json
     FROM perfume_embeddings e
     JOIN perfumes p ON p.id = e.perfume_id
@@ -74,7 +118,12 @@ function rankByVector(queryVec, rows, limit) {
   return scored.slice(0, limit);
 }
 
-async function retrieveCandidatesEmbeddings({ queryText, queryVec = null, limit = 8, filters = {} }) {
+async function retrieveCandidatesEmbeddings({
+  queryText,
+  queryVec = null,
+  limit = 8,
+  filters = {},
+}) {
   const rows = loadCandidatesFromDb(filters);
   const vec = queryVec || (await embedText(queryText));
   return rankByVector(vec, rows, limit);

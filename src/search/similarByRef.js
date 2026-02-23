@@ -2,12 +2,21 @@
 const db = require("../db/catalogDb");
 const { EMBED_MODEL } = require("../config");
 
+/* =========================
+   Helpers
+========================= */
 function safeJsonParse(s) {
-  try { return JSON.parse(s); } catch { return null; }
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
 }
 
 function cosineSim(a, b) {
-  let dot = 0, na = 0, nb = 0;
+  let dot = 0,
+    na = 0,
+    nb = 0;
   const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) {
     dot += a[i] * b[i];
@@ -20,44 +29,108 @@ function cosineSim(a, b) {
 
 function tableExists(name) {
   try {
-    const r = db.prepare(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name=? LIMIT 1`
-    ).get(name);
+    const r = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=? LIMIT 1`)
+      .get(name);
     return !!r;
   } catch {
     return false;
   }
 }
 
+/* =========================
+   Adaptive select for perfumes
+========================= */
+let _perfumeColsCache = null;
+
+function getPerfumeColumns() {
+  if (_perfumeColsCache) return _perfumeColsCache;
+  try {
+    const rows = db.prepare(`PRAGMA table_info('perfumes')`).all();
+    _perfumeColsCache = new Set(rows.map((r) => String(r.name)));
+  } catch {
+    _perfumeColsCache = new Set();
+  }
+  return _perfumeColsCache;
+}
+
+const PERFUME_FIELDS = [
+  "id",
+  "photo",
+  "number_code",
+  "name",
+  "premiere",
+  "type",
+  "for_whom",
+  "season",
+  "occasion",
+  "age",
+  "notes",
+  "keywords",
+  "version",
+  "description",
+  "projection",
+  "komu",
+];
+
+function selectFieldOrNull(field, cols) {
+  return cols.has(field) ? field : `NULL AS ${field}`;
+}
+
+function perfumeSelectSQL() {
+  const cols = getPerfumeColumns();
+  const selectList = PERFUME_FIELDS.map((f) => selectFieldOrNull(f, cols)).join(
+    ",\n      ",
+  );
+  return `
+    SELECT
+      ${selectList}
+    FROM perfumes
+  `;
+}
+
+/* =========================
+   Embeddings access
+========================= */
 function getEmbedding(perfumeId) {
-  const row = db.prepare(`
+  const row = db
+    .prepare(
+      `
     SELECT embedding_json
     FROM perfume_embeddings
     WHERE perfume_id = ? AND model = ?
     LIMIT 1
-  `).get(perfumeId, EMBED_MODEL);
+  `,
+    )
+    .get(perfumeId, EMBED_MODEL);
 
   const vec = row ? safeJsonParse(row.embedding_json) : null;
   return Array.isArray(vec) ? vec : null;
 }
 
 function getAllEmbeddings() {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT perfume_id, embedding_json
     FROM perfume_embeddings
     WHERE model = ?
-  `).all(EMBED_MODEL);
+  `,
+    )
+    .all(EMBED_MODEL);
 }
 
 function getPerfumesByIds(ids) {
   if (!ids.length) return [];
   const placeholders = ids.map(() => "?").join(",");
-  return db.prepare(`
-    SELECT
-      id, photo, number_code, name, type, for_whom, season, occasion, age, notes, keywords, version, description
-    FROM perfumes
+  return db
+    .prepare(
+      `
+    ${perfumeSelectSQL()}
     WHERE id IN (${placeholders})
-  `).all(...ids);
+  `,
+    )
+    .all(...ids);
 }
 
 function similarPerfumes(perfumeId, limit = 3) {
@@ -82,11 +155,11 @@ function similarPerfumes(perfumeId, limit = 3) {
   }
 
   scored.sort((a, b) => b.score - a.score);
-  const topIds = scored.slice(0, limit).map(x => x.id);
+  const topIds = scored.slice(0, limit).map((x) => x.id);
 
   const items = getPerfumesByIds(topIds);
-  const byId = new Map(items.map(x => [x.id, x]));
-  return { ok: true, items: topIds.map(id => byId.get(id)).filter(Boolean) };
+  const byId = new Map(items.map((x) => [x.id, x]));
+  return { ok: true, items: topIds.map((id) => byId.get(id)).filter(Boolean) };
 }
 
 module.exports = { similarPerfumes };
