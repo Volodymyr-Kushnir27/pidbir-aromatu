@@ -101,6 +101,51 @@ function startsWithTop(text) {
   return /^(?:топ|top)\b/i.test(String(text || "").trim());
 }
 
+function shouldHandleAsCodeLookup(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+
+  const low = t.toLowerCase();
+
+  // Не перехоплюємо фрази, де користувач просить "схожі" або вільний пошук.
+  if (
+    /(схож|similar|like|підбери|знайди|топ|top|аромат|парфум)/i.test(low)
+  ) {
+    return false;
+  }
+
+  // Явний запит по коду/номеру.
+  if (/\b(код|номер|арт(икул)?)\b/i.test(low)) return true;
+
+  // Або короткий standalone ввід: "77", "77A", "77 A".
+  return /^\s*\d{1,4}(?:\s*[A-Za-zА-Яа-яЄєІі])?\s*$/u.test(t);
+}
+
+function isMeaningfulSearchText(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+
+  // Має бути хоча б одна літера/цифра ("-", "..." і т.д. не валідні).
+  return /[\p{L}\p{N}]/u.test(t);
+}
+
+function looksLikeDirectNameQuery(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+
+  if (!isMeaningfulSearchText(t)) return false;
+  if (/[\n,;:]/.test(t)) return false;
+
+  const low = t.toLowerCase();
+  if (/(схож|similar|like|підбери|знайди|топ|top|код|номер|артикул)/i.test(low)) {
+    return false;
+  }
+
+  const words = t.split(/\s+/).filter(Boolean);
+  return words.length >= 1 && words.length <= 4;
+}
+
+
 /* =========================
    Entry actions
 ========================= */
@@ -282,7 +327,7 @@ async function onUserText(ctx) {
   }
 
   // 2) Code/number
-  if (!startsWithTop(text)) {
+  if (!startsWithTop(text) && shouldHandleAsCodeLookup(text)) {
     const code = extractNumberCode(text);
     if (code) {
       const items = findPerfumesByCodeOrDigits(code, { limit: 10 });
@@ -322,7 +367,35 @@ async function onUserText(ctx) {
     }
   }
 
-  // 3) Default pipeline
+  const isMeaningful =
+    typeof isMeaningfulSearchText === "function"
+      ? isMeaningfulSearchText(text)
+      : /[\p{L}\p{N}]/u.test(String(text || ""));
+
+  const isDirectNameQuery =
+    typeof looksLikeDirectNameQuery === "function"
+      ? looksLikeDirectNameQuery(text)
+      : false;
+
+  // 3) Direct name lookup (в т.ч. "Мегамаре" -> "Megamare")
+  if (isDirectNameQuery) {
+    const byName = findPerfumesByNameLike(text, { limit: 3 }) || [];
+    if (byName.length) {
+      await replyWithModes(ctx, `🔎 Знайшов ${byName.length} варіант(и) за назвою:`);
+      for (const p of byName) {
+        await sendPerfumeCard(ctx, p, { notes: false, season: false });
+      }
+      await replyModeHint(ctx);
+      return true;
+    }
+  }
+
+  if (!isMeaningful) {
+    await replyWithModes(ctx, "❌ Нічого релевантного не знайшов у базі.");
+    return true;
+  }
+
+  // 4) Default pipeline
   const res = await smartSearchPipeline(text, {
     limitCandidates: 120,
     forceForWhom,
