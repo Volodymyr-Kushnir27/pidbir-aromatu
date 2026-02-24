@@ -31,6 +31,32 @@ function termVariants(term) {
   return [...set].filter(Boolean).slice(0, 4);
 }
 
+function translitUaRuToLatin(s) {
+  const map = {
+    а: "a", б: "b", в: "v", г: "h", ґ: "g", д: "d", е: "e", є: "ye",
+    ж: "zh", з: "z", и: "y", і: "i", ї: "yi", й: "y", к: "k", л: "l",
+    м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u",
+    ф: "f", х: "kh", ц: "ts", ч: "ch", ш: "sh", щ: "shch", ь: "",
+    ю: "yu", я: "ya", ы: "y", э: "e", ё: "yo", ъ: "",
+  };
+
+  return String(s || "")
+    .split("")
+    .map((ch) => map[ch] ?? ch)
+    .join("");
+}
+
+function nameTermVariants(term) {
+  const base = termVariants(term);
+  const tr = translitUaRuToLatin(String(term || "").toLowerCase());
+  if (!tr || tr === String(term || "").toLowerCase()) return base;
+
+  // Для "г" у брендах/назвах часто зустрічається як g (Megamare), а не h.
+  const trAlt = tr.replace(/h/g, "g");
+
+  return [...new Set([...base, ...termVariants(tr), ...termVariants(trAlt)])].slice(0, 12);
+}
+
 /* =========================
    Code helpers
 ========================= */
@@ -179,7 +205,7 @@ function findPerfumesByNameLike(nameOrPart, { limit = 10 } = {}) {
   const wh = [];
   const params = [];
   for (const t of tokens) {
-    const vars = termVariants(t);
+    const vars = nameTermVariants(t);
     const ors = vars.map(() => `COALESCE(name,'') LIKE ?`).join(" OR ");
     wh.push(`(${ors})`);
     for (const v of vars) params.push(`%${v}%`);
