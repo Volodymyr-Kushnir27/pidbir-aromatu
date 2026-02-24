@@ -1,23 +1,30 @@
+// src/utils/phone.js
 function normalizePhone(input) {
-  if (!input) return null;
+  const raw = String(input || "").trim();
+  if (!raw) return null;
 
-  // прибираємо все, крім цифр
-  let digits = String(input).replace(/\D/g, "");
+  // лишаємо тільки цифри
+  let digits = raw.replace(/\D+/g, "");
 
-  // якщо починається з 0XXXXXXXXX -> робимо 380XXXXXXXXX
+  // Telegram інколи дає без '+', просто 380...
+  // 1) 0XXXXXXXXX -> 380XXXXXXXXX
   if (digits.length === 10 && digits.startsWith("0")) {
     digits = "38" + digits;
   }
 
-  // якщо 80380... -> прибираємо 80 (інколи так вводять)
-  if (digits.startsWith("80380")) {
-    digits = digits.slice(2);
+  // 2) 80XXXXXXXXX -> 380XXXXXXXXX (рідко, але буває)
+  if (digits.length === 11 && digits.startsWith("80")) {
+    digits = "3" + digits;
   }
 
-  // очікуємо 12 цифр: 380XXXXXXXXX
-  if (digits.length !== 12 || !digits.startsWith("380")) return null;
+  // 3) якщо вже 380XXXXXXXXX
+  if (digits.length === 12 && digits.startsWith("380")) {
+    return "+" + digits;
+  }
 
-  return `+${digits}`;
+  // 4) якщо прийшло з '+', ми його прибрали, тому це теж 12 цифр
+  // інші формати не приймаємо
+  return null;
 }
 
 module.exports = { normalizePhone };

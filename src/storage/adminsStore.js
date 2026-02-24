@@ -1,88 +1,62 @@
-// src/storage/adminsStore.js
+// src/storage/usersStore.js
 const fs = require("fs");
-const path = require("path");
+const { normalizePhone } = require("../utils/phone");
 
-function ensureDir(filePath) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
-function readJsonSafe(filePath, fallback) {
+function readJSON(path) {
   try {
-    if (!fs.existsSync(filePath)) return fallback;
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw || "[]");
-
-    // ✅ accept both array and { admins: [...] }
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && Array.isArray(parsed.admins)) return parsed.admins;
-
-    return fallback;
+    const t = fs.readFileSync(path, "utf8");
+    return JSON.parse(t || "[]");
   } catch {
-    return fallback;
+    return [];
   }
 }
 
-function writeJsonSafe(filePath, data) {
-  ensureDir(filePath);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+function writeJSON(path, data) {
+  fs.writeFileSync(path, JSON.stringify(data, null, 2), "utf8");
 }
 
-function list(filePath) {
-  return readJsonSafe(filePath, []);
+function findByPhone(path, phoneRaw) {
+  const phone = normalizePhone(phoneRaw);
+  if (!phone) return null;
+
+  const arr = readJSON(path);
+  return arr.find((u) => normalizePhone(u.phone) === phone) || null;
 }
 
-function findByPhone(filePath, phone) {
-  const arr = list(filePath);
-  return arr.find((a) => String(a.phone || "") === String(phone || "")) || null;
-}
+function attachTgId(path, phoneRaw, tgId) {
+  const phone = normalizePhone(phoneRaw);
+  if (!phone) return false;
 
-function upsertByPhone(filePath, record) {
-  const arr = list(filePath);
-  const phone = String(record.phone || "");
-  if (!phone) throw new Error("upsertByPhone: phone missing");
+  const arr = readJSON(path);
+  const idx = arr.findIndex((u) => normalizePhone(u.phone) === phone);
+  if (idx === -1) return false;
 
-  const idx = arr.findIndex((a) => String(a.phone || "") === phone);
-  if (idx === -1) arr.push(record);
-  else arr[idx] = { ...arr[idx], ...record };
+  arr[idx].phone = phone; // фіксуємо формат
+  arr[idx].tg_id = Number(tgId);
 
-  writeJsonSafe(filePath, arr);
+  writeJSON(path, arr);
   return true;
 }
 
-function removeByPhone(filePath, phone) {
-  const arr = list(filePath);
-  const before = arr.length;
-  const filtered = arr.filter((a) => String(a.phone || "") !== String(phone || ""));
-  writeJsonSafe(filePath, filtered);
-  return filtered.length !== before;
-}
+function setFio(path, phoneRaw, fio) {
+  const phone = normalizePhone(phoneRaw);
+  if (!phone) return false;
 
-function attachTgIdByPhone(filePath, phone, tgId) {
-  return upsertByPhone(filePath, { phone, tg_id: tgId });
-}
+  const arr = readJSON(path);
+  const idx = arr.findIndex((u) => normalizePhone(u.phone) === phone);
+  if (idx === -1) return false;
 
-function setFioByPhone(filePath, phone, fio) {
-  return upsertByPhone(filePath, { phone, fio });
-}
+  arr[idx].phone = phone;
+  arr[idx].fio = String(fio || "").trim();
 
-function isAdminByTgId(arg1, arg2) {
-  // support both: isAdminByTgId(filePath, tgId) and isAdminByTgId(tgId)
-  const filePath = typeof arg1 === "string" ? arg1 : null;
-  const tgId = typeof arg1 === "string" ? arg2 : arg1;
-
-  if (!tgId) return false;
-
-  const arr = list(filePath || require("../config").ADMINS_PATH);
-  return arr.some((a) => Number(a.tg_id) === Number(tgId));
+  writeJSON(path, arr);
+  return true;
 }
 
 module.exports = {
-  list,
+  readJSON,
+  writeJSON,
   findByPhone,
-  upsertByPhone,
-  removeByPhone,
-  attachTgIdByPhone,
-  setFioByPhone,
-  isAdminByTgId, // ✅ додано
+  attachTgId,
+  setFio,
 };

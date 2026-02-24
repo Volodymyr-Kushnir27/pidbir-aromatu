@@ -30,6 +30,7 @@ module.exports = {
     LIST_ADMINS: "ADMIN_LIST_ADMINS",
 
     USER_PICK: "USER_PICK",
+    USER_NOTES: "USER_NOTES",
     BACK_HOME: "BACK_HOME",
     EXIT_PICK: "EXIT_PICK",
   },

@@ -278,7 +278,7 @@ async function onAdminText(ctx) {
 
       upsertAdmin({ phone, fio, tg_id: null });
       clearAdminState(ctx);
-      return showAdminMenu(ctx, `✅ Додано адміна: ${phone} — ${fio}`);
+      return showAdminMenu(ctx, `👸 Додано адміна: ${phone} — ${fio}`);
     }
 
     clearAdminState(ctx);

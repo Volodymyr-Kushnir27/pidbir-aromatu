@@ -6,7 +6,6 @@ process.on("unhandledRejection", (e) =>
 );
 process.on("uncaughtException", (e) => console.error("uncaughtException:", e));
 
-const fs = require("fs");
 const { Telegraf } = require("telegraf");
 
 const { BOT_TOKEN, ADMINS_PATH, USERS_PATH, ACTIONS } = require("./config");
@@ -14,7 +13,6 @@ const { getRole } = require("./middleware/auth");
 
 const adminsStore = require("./storage/adminsStore");
 const usersStore = require("./storage/usersStore");
-
 
 const {
   adminMenuKeyboard,
@@ -30,10 +28,12 @@ const {
   onAdminText,
   clearAdminState,
 } = require("./flows/adminFlow");
+
 const {
   onUserPickAction,
+  onUserNotesAction,
   onUserText,
-  disablePickMode,
+  disableMode,
 } = require("./flows/perfumeChatFlow");
 
 // Card / Similar / Toggles
@@ -41,6 +41,7 @@ const { getPerfumeById } = require("./search/catalogRepo");
 const cardState = require("./flows/perfumeCardState");
 const { buildPerfumeCaption } = require("./ui/formatPerfumeCard");
 const { similarPerfumesByWeight } = require("./search/similarByWeight");
+const { smartSearchPipeline } = require("./search/smartSearchPipeline");
 const { sendPerfumeCard } = require("./flows/sendPerfumeCard");
 
 if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
@@ -64,15 +65,70 @@ const regState = new Map();
 /* =========================
    Helpers
 ========================= */
+function safeFrom(ctx) {
+  const f = ctx.from || {};
+  return {
+    id: f.id,
+    username: f.username || "",
+    first: f.first_name || "",
+    last: f.last_name || "",
+    lang: f.language_code || "",
+  };
+}
+
+async function safeAnswerCb(ctx) {
+  try {
+    await ctx.answerCbQuery();
+  } catch {}
+}
+
+function normalizeFio(text) {
+  const fio = String(text || "").trim().replace(/\s+/g, " ");
+  if (fio.split(" ").length < 2) return null;
+  if (fio.length < 5) return null;
+  return fio;
+}
+
+function findByPhone(rawPhone) {
+  const phone = normalizePhone(rawPhone);
+  if (!phone) return null;
+
+  const admin = adminsStore.findByPhone(ADMINS_PATH, phone);
+  if (admin) return { kind: "admin", record: admin, phone };
+
+  const user = usersStore.findByPhone(USERS_PATH, phone);
+  if (user) return { kind: "user", record: user, phone };
+
+  return null;
+}
+
+function attachTgId(kind, phone, tgId) {
+  if (kind === "admin" && typeof adminsStore.attachTgId === "function") {
+    return adminsStore.attachTgId(ADMINS_PATH, phone, tgId);
+  }
+  if (kind === "user" && typeof usersStore.attachTgId === "function") {
+    return usersStore.attachTgId(USERS_PATH, phone, tgId);
+  }
+}
+
+function setFio(kind, phone, fio) {
+  if (kind === "admin" && typeof adminsStore.setFio === "function") {
+    return adminsStore.setFio(ADMINS_PATH, phone, fio);
+  }
+  if (kind === "user" && typeof usersStore.setFio === "function") {
+    return usersStore.setFio(USERS_PATH, phone, fio);
+  }
+}
+
 async function showHome(ctx) {
   const role = getRole(ctx);
 
-  // reset any active modes on home
+  // reset any active states on home
   try {
     clearAdminState(ctx);
   } catch {}
   try {
-    if (role !== "user") disablePickMode(ctx);
+    disableMode(ctx);
   } catch {}
 
   if (role === "admin") {
@@ -80,19 +136,7 @@ async function showHome(ctx) {
   }
 
   if (role === "user") {
-    // ✅ для продавця режим підбору завжди активний
-    try {
-      clearAdminState(ctx);
-    } catch {}
-    // НЕ викликаємо disablePickMode тут
-    await onUserPickAction(ctx);
-
-    return ctx.reply(
-      "✅ Ти в режимі підбору активний.\n" +
-        "Можеш ввести:\n" +
-        "- код парфуму: 77A\n" +
-        "- або назву/опис: солодкий цитрус на літо",
-    );
+    return ctx.reply("Оберіть режим роботи:", userMenuKeyboard());
   }
 
   return ctx.reply(
@@ -104,59 +148,17 @@ async function showHome(ctx) {
   );
 }
 
-function normalizeFio(text) {
-  const fio = String(text || "")
-    .trim()
-    .replace(/\s+/g, " ");
-  if (fio.split(" ").length < 2) return null;
-  if (fio.length < 5) return null;
-  return fio;
-}
-
-function findByPhone(phone) {
-  const admin = adminsStore.findByPhone(ADMINS_PATH, phone);
-  if (admin) return { kind: "admin", record: admin };
-
-  const user = usersStore.findByPhone(USERS_PATH, phone);
-  if (user) return { kind: "user", record: user };
-
-  return null;
-}
-
-function attachTgId(kind, phone, tgId) {
-  if (kind === "admin")
-    return adminsStore.attachTgIdByPhone(ADMINS_PATH, phone, tgId);
-  if (kind === "user")
-    return usersStore.attachTgIdByPhone(USERS_PATH, phone, tgId);
-}
-
-function setFio(kind, phone, fio) {
-  if (kind === "admin")
-    return adminsStore.setFioByPhone(ADMINS_PATH, phone, fio);
-  if (kind === "user") return usersStore.setFioByPhone(USERS_PATH, phone, fio);
-}
-
-async function safeAnswerCb(ctx) {
-  try {
-    await ctx.answerCbQuery();
-  } catch {}
-}
-
 /* =========================
    Commands
 ========================= */
 bot.start(async (ctx) => showHome(ctx));
-
-bot.command("help", async (ctx) => {
-  return ctx.reply(
-    "/start — меню\n" +
-      "/myid — показати tg_id\n\n" +
-      "Реєстрація: номер → ФІО",
-  );
-});
+bot.command("home", async (ctx) => showHome(ctx));
 
 bot.command("myid", async (ctx) => {
-  return ctx.reply(`Ваш tg_id: ${ctx.from?.id}`);
+  const u = safeFrom(ctx);
+  return ctx.reply(
+    `/start\n\n${u.username}\nId: ${u.id}\nFirst: ${u.first}\nLast: ${u.last}\nLang: ${u.lang}`,
+  );
 });
 
 /* =========================
@@ -174,31 +176,23 @@ bot.on("contact", async (ctx) => {
   const phone = normalizePhone(contact.phone_number);
   if (!phone) return ctx.reply("❌ Некоректний номер.");
 
+  // debug (можеш прибрати після фіксу)
+  console.log("CONTACT RAW:", contact.phone_number);
+  console.log("CONTACT NORM:", phone);
+
   const found = findByPhone(phone);
-  if (!found)
+  if (!found) {
     return ctx.reply("⛔ Номер не знайдено у списку. Зверніться до адміна.");
+  }
 
   // If already has FIO → attach tg_id and go home
   if (found.record?.fio) {
-    attachTgId(found.kind, phone, ctx.from.id);
-
-    // ✅ якщо це продавець — одразу стартуємо режим підбору
-    if (found.kind === "user") {
-      await onUserPickAction(ctx); // вмикає pick mode (у твоєму perfumeChatFlow)
-      return ctx.reply(
-        "✅ Ти в режимі підбору активний.\n" +
-          "Можеш ввести:\n" +
-          "- код парфуму: 77A\n" +
-          "- або назву/опис: солодкий цитрус на літо",
-      );
-    }
-
-    // ✅ адмін як і раніше бачить меню
+    attachTgId(found.kind, found.phone, ctx.from.id);
     return showHome(ctx);
   }
 
   // Need FIO
-  regState.set(ctx.from.id, { step: "fio", phone });
+  regState.set(ctx.from.id, { step: "fio", phone: found.phone });
   return ctx.reply("✍️ Введіть ваше ФІО (Прізвище Ім’я).");
 });
 
@@ -218,78 +212,50 @@ bot.on("text", async (ctx) => {
   }
 
   // 1) Guest registration flow (FIO step)
-  if (role === "guest") {
-    const state = regState.get(tgId);
+  const state = regState.get(tgId);
+  if (state?.step === "fio") {
+    const fio = normalizeFio(text);
+    if (!fio) {
+      return ctx.reply(
+        "❌ ФІО має бути мінімум 2 слова. Наприклад: 'Іваненко Іван'.",
+      );
+    }
 
-    // Step 2: waiting FIO
-    if (state?.step === "fio") {
-      const fio = normalizeFio(text);
-      if (!fio)
-        return ctx.reply(
-          "❌ Невірне ФІО. Введіть мінімум 2 слова (Прізвище Імʼя).",
-        );
-
-      const found = findByPhone(state.phone);
-      if (!found) {
-        regState.delete(tgId);
-        return ctx.reply(
-          "⛔ Номер не знайдено у списку. Зверніться до адміна.",
-        );
-      }
-
-      attachTgId(found.kind, state.phone, tgId);
-      setFio(found.kind, state.phone, fio);
-
+    const found = findByPhone(state.phone);
+    if (!found) {
       regState.delete(tgId);
+      return ctx.reply("⛔ Номер не знайдено у списку. Зверніться до адміна.");
+    }
+
+    attachTgId(found.kind, found.phone, tgId);
+    setFio(found.kind, found.phone, fio);
+
+    regState.delete(tgId);
+    return showHome(ctx);
+  }
+
+  // Optional: allow typing phone manually
+  const maybePhone = normalizePhone(text);
+  if (maybePhone) {
+    const found = findByPhone(maybePhone);
+    if (!found) {
+      return ctx.reply("⛔ Номер не знайдено у списку. Зверніться до адміна.");
+    }
+
+    if (found.record?.fio) {
+      attachTgId(found.kind, found.phone, tgId);
       return showHome(ctx);
     }
 
-    // Optional: allow typing phone manually
-    const maybePhone = normalizePhone(text);
-    if (maybePhone) {
-      const found = findByPhone(maybePhone);
-      if (!found)
-        return ctx.reply(
-          "⛔ Номер не знайдено у списку. Зверніться до адміна.",
-        );
-
-      if (found.record?.fio) {
-        attachTgId(found.kind, maybePhone, tgId);
-
-        if (found.kind === "user") {
-          await onUserPickAction(ctx);
-          return ctx.reply(
-            "✅ Ти в режимі підбору активний.\n" +
-              "Можеш ввести:\n" +
-              "- код парфуму: 77A\n" +
-              "- або назву/опис: солодкий цитрус на літо",
-          );
-        }
-
-        return showHome(ctx);
-      }
-
-      regState.set(tgId, { step: "fio", phone: maybePhone });
-      return ctx.reply("✍️ Введіть ваше ФІО (Прізвище Ім’я).");
-    }
-
-    return ctx.reply(
-      "Надішліть номер телефону кнопкою «Поділитися номером» або введіть +380...",
-    );
+    regState.set(tgId, { step: "fio", phone: found.phone });
+    return ctx.reply("✍️ Введіть ваше ФІО (Прізвище Ім’я).");
   }
 
-  // 2) User pick mode text (admin also allowed)
+  // 2) User modes text (admin/user)
   if (role === "admin" || role === "user") {
     const handled = await onUserText(ctx);
     if (handled) return;
   }
-
-  // ✅ якщо user написав щось, а режим ще не активний — активуємо і пробуємо ще раз
-if (role === "user") {
-  await onUserPickAction(ctx);
-  const handled2 = await onUserText(ctx);
-  if (handled2) return;
-}
 
   return ctx.reply("Використайте /start щоб відкрити меню.");
 });
@@ -300,83 +266,79 @@ if (role === "user") {
 bot.on("callback_query", async (ctx) => {
   const data = ctx.callbackQuery?.data;
   await safeAnswerCb(ctx);
-
   if (!data) return;
+
+  console.log("CB DATA:", data);
 
   const role = getRole(ctx);
 
   // Back home
   if (data === ACTIONS.BACK_HOME) return showHome(ctx);
 
-  // Exit pick mode
+  // Exit any user mode (pick/notes)
   if (data === ACTIONS.EXIT_PICK) {
     try {
-      disablePickMode(ctx);
+      disableMode(ctx);
     } catch {}
-    return ctx.reply("✅ Вийшли з режиму підбору. Напишіть /start.");
+    return ctx.reply("✅ Режим вимкнено. Напишіть /start.");
   }
 
-  // Perfume card buttons: P:NOTES:<id> / P:SEASON:<id> / P:SIMILAR:<id>
-  if (typeof data === "string" && data.startsWith("P:")) {
-    const [, action, idStr] = data.split(":");
-    const perfumeId = Number(idStr);
+  // ---- parse like PREFIX:ID ----
+  const [prefix, idRaw] = String(data).split(":");
+  const perfumeId = idRaw ? Number(idRaw) : null;
 
-    const chatId = ctx.chat?.id;
-    const messageId = ctx.callbackQuery?.message?.message_id;
-    if (!perfumeId || !chatId || !messageId) return;
+  // message context (needed for state key)
+  const msg = ctx.callbackQuery?.message;
+  const chatId = msg?.chat?.id;
+  const messageId = msg?.message_id;
 
-    // Toggle NOTES / SEASON
-    if (action === "NOTES" || action === "SEASON") {
-      const field = action === "NOTES" ? "notes" : "season";
-      const toggles = cardState.toggle(chatId, messageId, perfumeId, field);
+  // ---------- Perfume card actions ----------
+  if (prefix === "SIMILAR" && perfumeId) {
+  const base = getPerfumeById(perfumeId);
+  if (!base) return ctx.reply("⚠️ Парфум не знайдено.");
 
-      const perfume = getPerfumeById(perfumeId);
-      if (!perfume) return ctx.reply("❌ Не знайшов аромат у БД.");
+  // робимо "схоже" через smartSearchPipeline (а не similarByWeight.js)
+  const q = `схоже на ${base.name}`;
+  const res = await smartSearchPipeline(q, { limitCandidates: 180 });
 
-      const caption = buildPerfumeCaption(perfume, toggles);
+  // прибираємо сам базовий аромат, якщо він раптом потрапив у результат
+  const top = (res.topItems || []).filter((p) => Number(p.id) !== Number(base.id)).slice(0, 3);
 
-      try {
-        await ctx.telegram.editMessageCaption(
-          chatId,
-          messageId,
-          undefined,
-          caption,
-          {
-            ...perfumeCardKeyboard(perfumeId),
-          },
-        );
-      } catch (e) {
-        console.error("editMessageCaption error:", e?.message);
-        await ctx.reply("⚠️ Не зміг оновити картку. Надсилаю нову нижче.");
-        await sendPerfumeCard(ctx, perfume, toggles);
-      }
-      return;
-    }
+  if (!top.length) return ctx.reply("❌ Схожих не знайшов.");
 
- // SIMILAR (без embeddings, по вагам)
-if (action === "SIMILAR") {
-  const res = similarPerfumesByWeight(perfumeId, 3);
-
-  if (!res.ok) {
-    return ctx.reply("❌ Не зміг підібрати схожі (перевір логіку similarByWeight).");
-  }
-
-  if (!res.items.length) {
-    return ctx.reply("❌ Схожих не знайшов за правилами (ваги/фільтри).");
-  }
-
-  await ctx.reply("✨ Схожі аромати (топ-3):");
-  for (const p of res.items) {
+  await ctx.reply(`✨ Схожі (топ-${top.length})`);
+  for (const p of top) {
     await sendPerfumeCard(ctx, p, { notes: false, season: false });
   }
   return;
 }
 
-    return;
+  // ✅ Toggle NOTES/SEASON (правильний виклик cardState.toggle)
+  if ((prefix === "TOGGLE_NOTES" || prefix === "TOGGLE_SEASON") && perfumeId) {
+    if (!chatId || !messageId) return;
+
+    const field = prefix === "TOGGLE_NOTES" ? "notes" : "season";
+    const state = cardState.toggle(chatId, messageId, perfumeId, field);
+
+    const p = getPerfumeById(perfumeId);
+    if (!p) return ctx.reply("⚠️ Парфум не знайдено.");
+
+    const caption = buildPerfumeCaption(p, state);
+    const keyboard = perfumeCardKeyboard(perfumeId, state);
+
+    try {
+      return await ctx.editMessageCaption(caption, keyboard);
+    } catch (e) {
+      // ✅ якщо Telegram каже "message is not modified" — просто ігноруємо
+      const msg = String(e?.description || e?.message || "");
+      if (msg.includes("message is not modified")) return;
+      console.error("editMessageCaption error:", e);
+      return;
+    }
   }
 
-  // ADMIN buttons (ADMIN_*)
-  if (typeof data === "string" && data.startsWith("ADMIN_")) {
+  // ---------- Admin menu actions ----------
+  if (String(data).startsWith("ADMIN_")) {
     if (role !== "admin") return ctx.reply("⛔ Доступ тільки для адміна.");
 
     const map = {
@@ -390,16 +352,22 @@ if (action === "SIMILAR") {
 
     const action = map[data];
     if (!action) return ctx.reply("⚠️ Невідома адмін-дія.");
-
     return onAdminAction(ctx, action);
   }
 
-  // User menu actions
+  // ---------- User menu actions ----------
   if (data === ACTIONS.USER_PICK) {
     if (role !== "admin" && role !== "user") {
       return ctx.reply("⛔ Немає доступу.", shareContactKeyboard());
     }
     return onUserPickAction(ctx);
+  }
+
+  if (data === ACTIONS.USER_NOTES) {
+    if (role !== "admin" && role !== "user") {
+      return ctx.reply("⛔ Немає доступу.", shareContactKeyboard());
+    }
+    return onUserNotesAction(ctx);
   }
 
   return ctx.reply("⚠️ Невідома дія кнопки.");

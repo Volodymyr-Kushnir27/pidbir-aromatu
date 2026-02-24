@@ -1,62 +1,44 @@
-function truncate(s, n) {
-  s = String(s || "").trim();
-  if (!s) return "";
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+// src/ui/formatPerfumeCard.js
+function norm(s) {
+  return String(s || "").trim();
 }
 
-function genderEmoji(forWhom) {
-  const x = String(forWhom || "").toLowerCase();
-  if (x.includes("чолов")) return "👨 Чоловічий";
-  if (x.includes("жін")) return "👩 Жіночий";
-  if (x.includes("унісекс")) return "🧑‍🤝‍🧑 Унісекс";
-  return "🧑 Для всіх";
-}
+function buildPerfumeCaption(perfume, toggles = { notes: false, season: false, reasonText: "" }) {
+  const p = perfume || {};
 
-function safeLine(label, value) {
-  const v = String(value || "").trim();
-  return v ? `${label}: ${v}` : "";
-}
+  const name = norm(p.name);
+  const forWhom = norm(p.for_whom);
+  const type = norm(p.type);
+  const season = norm(p.season);
+  const desc = norm(p.description);
+  const notes = norm(p.notes);
 
-function buildPerfumeCaption(p, toggles = {}) {
-  // Основний текст картки (як на скріні)
-  const header = `${p.number_code ? p.number_code + " " : ""}${p.brand ? p.brand + " " : ""}"${p.name}" (версія аромату)`;
-  const g = genderEmoji(p.for_whom);
+  const lines = [];
 
-  const type = safeLine("Тип", p.type);
-  const occasion = safeLine("Для події", p.occasion);
-  const age = safeLine("Вік", p.age);
+  if (name) lines.push(name);
 
-  const desc = p.description ? `Опис: ${truncate(p.description, 360)}` : "";
+  if (forWhom) {
+    const fw = forWhom.toLowerCase();
+    const icon = fw.includes("жін") ? "👩" : fw.includes("чолов") ? "👨" : "🧑";
+    lines.push(`${icon} ${forWhom}`);
+  }
 
-  // Toggle секції
-  const notes = toggles.notes
-    ? `\n\nНоти:\n${truncate(p.notes || p.notes_text || "", 420)}`
-    : "";
+  if (type) lines.push(`Тип: ${type}`);
 
-  const season = toggles.season
-    ? `\n\nСезон:\n${truncate(p.season || "", 220)}`
-    : "";
+  // БАЗОВО сезон не показуємо, тільки по toggle
+  if (toggles?.season) {
+    lines.push(`🌤 Сезон: ${season || "— (немає в базі)"}`);
+  }
 
-  // Склейка + контроль довжини
-  const parts = [
-    header,
-    g,
-    "",
-    type,
-    occasion,
-    age,
-    "",
-    desc,
-    notes,
-    season,
-  ].filter(Boolean);
+  if (desc) lines.push(`Опис: ${desc}`);
 
-  let caption = parts.join("\n");
+  // Ноти — тільки по toggle
+  if (toggles?.notes) {
+    lines.push("");
+    lines.push(`✨ Ноти: ${notes || "— (немає в базі)"}`);
+  }
 
-  // safety: Telegram caption limit ~1024
-  if (caption.length > 980) caption = caption.slice(0, 979) + "…";
-
-  return caption;
+  return lines.filter(Boolean).join("\n");
 }
 
 module.exports = { buildPerfumeCaption };
