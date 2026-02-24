@@ -121,6 +121,31 @@ function shouldHandleAsCodeLookup(text) {
   return /^\s*\d{1,4}(?:\s*[A-Za-zА-Яа-яЄєІі])?\s*$/u.test(t);
 }
 
+function isMeaningfulSearchText(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+
+  // Має бути хоча б одна літера/цифра ("-", "..." і т.д. не валідні).
+  return /[\p{L}\p{N}]/u.test(t);
+}
+
+function looksLikeDirectNameQuery(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+
+  if (!isMeaningfulSearchText(t)) return false;
+  if (/[\n,;:]/.test(t)) return false;
+
+  const low = t.toLowerCase();
+  if (/(схож|similar|like|підбери|знайди|топ|top|код|номер|артикул)/i.test(low)) {
+    return false;
+  }
+
+  const words = t.split(/\s+/).filter(Boolean);
+  return words.length >= 1 && words.length <= 4;
+}
+
+
 /* =========================
    Entry actions
 ========================= */
@@ -368,7 +393,6 @@ async function onUserText(ctx) {
     await replyWithModes(ctx, "❌ Нічого релевантного не знайшов у базі.");
     return true;
   }
-
   await replyWithModes(ctx, "✨ Топ-3 варіанти:");
   for (const p of res.topItems.slice(0, 3)) {
     await sendPerfumeCard(ctx, p, { notes: false, season: false });
