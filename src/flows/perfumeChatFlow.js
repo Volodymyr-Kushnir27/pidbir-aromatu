@@ -21,6 +21,85 @@ const { userMenuKeyboard } = require("../ui/keyboards");
 ========================= */
 const userMode = new Map();
 
+function norm(s) {
+  return String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// UA/RU -> Latin (простий трансліт достатній для брендів)
+function translitCyrToLat(input) {
+  const s = String(input || "");
+  const map = {
+    а:"a",б:"b",в:"v",г:"h",ґ:"g",д:"d",е:"e",є:"ye",ж:"zh",з:"z",и:"y",і:"i",ї:"yi",й:"y",к:"k",л:"l",м:"m",
+    н:"n",о:"o",п:"p",р:"r",с:"s",т:"t",у:"u",ф:"f",х:"kh",ц:"ts",ч:"ch",ш:"sh",щ:"shch",ь:"",ю:"yu",я:"ya",
+    А:"A",Б:"B",В:"V",Г:"H",Ґ:"G",Д:"D",Е:"E",Є:"Ye",Ж:"Zh",З:"Z",И:"Y",І:"I",Ї:"Yi",Й:"Y",К:"K",Л:"L",М:"M",
+    Н:"N",О:"O",П:"P",Р:"R",С:"S",Т:"T",У:"U",Ф:"F",Х:"Kh",Ц:"Ts",Ч:"Ch",Ш:"Sh",Щ:"Shch",Ь:"",Ю:"Yu",Я:"Ya",
+
+    // RU
+    ё:"yo",ъ:"",ы:"y",э:"e",
+    Ё:"Yo",Ъ:"",Ы:"Y",Э:"E",
+  };
+  return s.split("").map((ch) => (ch in map ? map[ch] : ch)).join("");
+}
+
+function buildNameVariants(q) {
+  const raw = String(q || "").trim();
+  if (!raw) return [];
+
+  const clean = raw.replace(/^["'“”]+|["'“”]+$/g, "").trim();
+
+  const variants = new Set();
+  const push = (x) => {
+    const t = String(x || "").trim();
+    if (t.length >= 2) variants.add(t);
+  };
+
+  push(clean);
+
+  // lower / space-normalized
+  push(norm(clean));
+
+  // translit if contains cyrillic
+  if (/[А-Яа-яЁёЄєІіЇїҐґ]/.test(clean)) {
+    push(translitCyrToLat(clean));
+    push(norm(translitCyrToLat(clean)));
+  }
+
+  // brand fixes for Victoria's Secret
+  // 1) "victoria secret" -> "victoria's secret"
+  for (const v of Array.from(variants)) {
+    const vv = norm(v);
+    if (vv.includes("victoria secret")) {
+      push(vv.replace(/\bvictoria secret\b/g, "victoria's secret"));
+      push(v.replace(/Victoria Secret/g, "Victoria's Secret"));
+    }
+    // common UA/RU phrase -> english
+    if (vv.includes("виктория сикрет") || vv.includes("виктория секрет")) {
+      push("Victoria's Secret");
+      push("Victoria Secret");
+    }
+  }
+
+  // remove apostrophes / add apostrophes (both ways)
+  for (const v of Array.from(variants)) {
+    push(v.replace(/['’]/g, ""));
+    // add 's between word + s when missing (basic)
+    push(v.replace(/\b(\w+)\s+s\b/gi, "$1's"));
+  }
+
+  // final uniq list
+  return Array.from(variants).slice(0, 8);
+}
+
+// tries name-like search by multiple variants
+function findByNameVariants(query, { limit = 3 } = {}) {
+  const variants = buildNameVariants(query);
+  for (const v of variants) {
+    const hit = findPerfumesByNameLike(v, { limit }) || [];
+    if (hit.length) return { items: hit, usedQuery: v, variants };
+  }
+  return { items: [], usedQuery: "", variants };
+}
+
 if (typeof detectForWhomFromText !== "function") {
   throw new Error(
     "detectForWhomFromText is not exported from smartSearchPipeline.js",
@@ -56,12 +135,10 @@ function disableMode(ctx) {
    UI helpers
 ========================= */
 async function replyWithModes(ctx, text) {
-  // ПРИМІТКА: додаємо inline кнопки до КОЖНОЇ відповіді
   return ctx.reply(text, userMenuKeyboard());
 }
 
 async function replyModeHint(ctx) {
-  // короткий рядок після списку карточок, щоб продавець міг одразу переключитись
   return ctx.reply("↩️ Обери режим:", userMenuKeyboard());
 }
 
@@ -107,25 +184,18 @@ function shouldHandleAsCodeLookup(text) {
 
   const low = t.toLowerCase();
 
-  // Не перехоплюємо фрази, де користувач просить "схожі" або вільний пошук.
-  if (
-    /(схож|similar|like|підбери|знайди|топ|top|аромат|парфум)/i.test(low)
-  ) {
+  if (/(схож|similar|like|підбери|знайди|топ|top|аромат|парфум)/i.test(low)) {
     return false;
   }
 
-  // Явний запит по коду/номеру.
   if (/\b(код|номер|арт(икул)?)\b/i.test(low)) return true;
 
-  // Або короткий standalone ввід: "77", "77A", "77 A".
   return /^\s*\d{1,4}(?:\s*[A-Za-zА-Яа-яЄєІі])?\s*$/u.test(t);
 }
 
 function isMeaningfulSearchText(text) {
   const t = String(text || "").trim();
   if (!t) return false;
-
-  // Має бути хоча б одна літера/цифра ("-", "..." і т.д. не валідні).
   return /[\p{L}\p{N}]/u.test(t);
 }
 
@@ -145,6 +215,64 @@ function looksLikeDirectNameQuery(text) {
   return words.length >= 1 && words.length <= 4;
 }
 
+/* =========================
+   Notes-mode name check
+========================= */
+function looksLikePerfumeNameForNotes(text) {
+  const t = String(text || "").trim();
+  const low = t.toLowerCase();
+
+  if (t.length < 4) return false;
+
+  const badWords = [
+    "з ",
+    "зі ",
+    "без ",
+    "ноти",
+    "запах",
+    "аромат",
+    "парфум",
+    "парфуми",
+    "чолов",
+    "жін",
+    "унісекс",
+    "літо",
+    "зима",
+    "весна",
+    "осін",
+    "на кожен день",
+    "на роботу",
+    "на вечір",
+    "солод",
+    "свіж",
+    "фрукт",
+    "квіт",
+    "дерев",
+    "муск",
+    "підбери",
+    "знайди",
+    "хочу",
+    "порадь",
+    "порекомендуй",
+  ];
+  if (badWords.some((w) => low.includes(w))) return false;
+
+  if (/[,\n;]/.test(t)) return false;
+
+  const words = t
+    .replace(/[()"'“”]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+
+  if (words.length < 2) return false;
+
+  const longish = words.filter((w) => w.length >= 3);
+  if (longish.length < 2) return false;
+
+  return true;
+}
 
 /* =========================
    Entry actions
@@ -182,44 +310,6 @@ async function onUserNotesAction(ctx, { silent = false } = {}) {
 /* =========================
    Main handler
 ========================= */
-function looksLikePerfumeNameForNotes(text) {
-  const t = String(text || "").trim();
-  const low = t.toLowerCase();
-
-  if (t.length < 4) return false;
-
-  // якщо є явні "фільтри/опис", це не назва
-  const badWords = [
-    "з ", "зі ", "без ", "ноти", "запах", "аромат", "парфум", "парфуми",
-    "чолов", "жін", "унісекс",
-    "літо", "зима", "весна", "осін",
-    "на кожен день", "на роботу", "на вечір",
-    "солод", "свіж", "фрукт", "квіт", "дерев", "муск",
-    "підбери", "знайди", "хочу", "порадь", "порекомендуй"
-  ];
-  if (badWords.some(w => low.includes(w))) return false;
-
-  // якщо містить кому / багато розділювачів — скоріше опис/фільтри
-  if (/[,\n;]/.test(t)) return false;
-
-  // повинно бути хоча б 2 "слівних" токени (бренд + назва)
-  const words = t
-    .replace(/[()"'“”]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(" ")
-    .filter(Boolean);
-
-  // відкидаємо якщо 1 слово (часто це нота/загальний запит)
-  if (words.length < 2) return false;
-
-  // якщо майже всі слова дуже короткі — підозріло
-  const longish = words.filter(w => w.length >= 3);
-  if (longish.length < 2) return false;
-
-  return true;
-}
-
 async function onUserText(ctx) {
   const mode = getMode(ctx);
   if (!mode) return false;
@@ -227,7 +317,6 @@ async function onUserText(ctx) {
   const text = String(ctx.message?.text || "").trim();
   if (!text) return true;
 
-  // universal cancel
   if (/^\/cancel\b/i.test(text)) {
     disableMode(ctx);
     await replyWithModes(
@@ -238,39 +327,39 @@ async function onUserText(ctx) {
   }
 
   /* ===== NOTES MODE ===== */
- if (mode === "notes") {
-  // якщо це не назва — НЕ викликаємо GPT
-  if (!looksLikePerfumeNameForNotes(text)) {
-    await ctx.reply(
-      "❗️Для «Ноти» потрібна *конкретна назва парфуму*.\n\n" +
-        "✅ Приклади:\n" +
-        "• Dior Sauvage\n" +
-        "• Lanvin Éclat d’Arpège\n" +
-        "• Jean Paul Gaultier Le Male\n\n" +
-        "✍️ Введи назву парфуму:",
-      userMenuKeyboard(), // ✅ кнопки під повідомленням
-    );
+  if (mode === "notes") {
+    if (!looksLikePerfumeNameForNotes(text)) {
+      await ctx.reply(
+        "❗️Для «Ноти» потрібна *конкретна назва парфуму*.\n\n" +
+          "✅ Приклади:\n" +
+          "• Dior Sauvage\n" +
+          "• Lanvin Éclat d’Arpège\n" +
+          "• Jean Paul Gaultier Le Male\n\n" +
+          "✍️ Введи назву парфуму:",
+        userMenuKeyboard(),
+      );
+      return true;
+    }
+
+    try {
+      const answer = await writePerfumeNotes(text);
+      await ctx.reply(answer, userMenuKeyboard());
+    } catch (e) {
+      console.error("writePerfumeNotes error:", e?.message || e);
+      await ctx.reply(
+        "⚠️ Не вдалось отримати опис аромату. Спробуй ще раз.",
+        userMenuKeyboard(),
+      );
+    }
+
     return true;
   }
 
-  try {
-    const answer = await writePerfumeNotes(text);
-
-    // ✅ відповідь + кнопки під відповіддю
-    await ctx.reply(answer, userMenuKeyboard());
-  } catch (e) {
-    console.error("writePerfumeNotes error:", e?.message || e);
-    await ctx.reply(
-      "⚠️ Не вдалось отримати опис аромату. Спробуй ще раз.",
-      userMenuKeyboard(), // ✅ кнопки навіть при помилці
-    );
-  }
-
-  return true;
-}
-
   /* ===== PICK MODE ===== */
   const forceForWhom = detectForWhomFromText(text);
+
+  const reasonFromRes = (res, p, fallback = "") =>
+    (res?.reasons_by_id && res.reasons_by_id[String(p.id)]) || fallback || "";
 
   // 0) TOP-N
   const topReq = parseTopN(text);
@@ -290,7 +379,11 @@ async function onUserText(ctx) {
 
     await replyWithModes(ctx, `🏆 Найкращі ${res.topItems.length} варіант(и):`);
     for (const p of res.topItems) {
-      await sendPerfumeCard(ctx, p, { notes: false, season: false });
+      await sendPerfumeCard(ctx, p, {
+        notes: false,
+        season: false,
+        reasonText: reasonFromRes(res, p),
+      });
     }
     await replyModeHint(ctx);
     return true;
@@ -302,7 +395,6 @@ async function onUserText(ctx) {
     const refs = findPerfumesByNameLike(target, { limit: 5 }) || [];
     if (refs.length) {
       const ref = refs[0];
-
       const forced = forceForWhom || detectForWhomFromText(ref?.for_whom);
 
       const res = await smartSearchPipeline(text, {
@@ -319,7 +411,11 @@ async function onUserText(ctx) {
 
       await replyWithModes(ctx, `✨ Схожі (топ-${top.length})`);
       for (const p of top) {
-        await sendPerfumeCard(ctx, p, { notes: false, season: false });
+        await sendPerfumeCard(ctx, p, {
+          notes: false,
+          season: false,
+          reasonText: reasonFromRes(res, p),
+        });
       }
       await replyModeHint(ctx);
       return true;
@@ -350,7 +446,11 @@ async function onUserText(ctx) {
       const list = filtered.length ? filtered : items;
 
       if (list.length === 1) {
-        await sendPerfumeCard(ctx, list[0], { notes: false, season: false });
+        await sendPerfumeCard(ctx, list[0], {
+          notes: false,
+          season: false,
+          reasonText: `Знайдено по коду: ${code}`,
+        });
         await replyModeHint(ctx);
         return true;
       }
@@ -360,30 +460,45 @@ async function onUserText(ctx) {
         `🔎 Знайшов ${list.length} варіант(и) по "${code}". Показую до 3:`,
       );
       for (const p of list.slice(0, 3)) {
-        await sendPerfumeCard(ctx, p, { notes: false, season: false });
+        await sendPerfumeCard(ctx, p, {
+          notes: false,
+          season: false,
+          reasonText: `Знайдено по коду: ${code}`,
+        });
       }
       await replyModeHint(ctx);
       return true;
     }
   }
 
-  // 3) Direct name lookup (в т.ч. "Мегамаре" -> "Megamare")
+    // 3) Direct name lookup (з мультимовними варіантами + автоправки)
   if (looksLikeDirectNameQuery(text)) {
-    const byName = findPerfumesByNameLike(text, { limit: 3 }) || [];
-    if (byName.length) {
-      await replyWithModes(ctx, `🔎 Знайшов ${byName.length} варіант(и) за назвою:`);
-      for (const p of byName) {
-        await sendPerfumeCard(ctx, p, { notes: false, season: false });
+    const r = findByNameVariants(text, { limit: 3 });
+
+    if (r.items.length) {
+      const used = r.usedQuery && r.usedQuery !== text ? ` (пошук: ${r.usedQuery})` : "";
+      await replyWithModes(ctx, `🔎 Знайшов ${r.items.length} варіант(и) за назвою${used}:`);
+
+      for (const p of r.items) {
+        await sendPerfumeCard(ctx, p, {
+          notes: false,
+          season: false,
+          reasonText: `Знайдено по назві${used}`,
+        });
       }
+
       await replyModeHint(ctx);
       return true;
     }
   }
 
+  // 4) Garbage / empty
   if (!isMeaningfulSearchText(text)) {
     await replyWithModes(ctx, "❌ Нічого релевантного не знайшов у базі.");
     return true;
   }
+
+  // 5) Main pipeline
   const res = await smartSearchPipeline(text, {
     limitCandidates: 120,
     forceForWhom,
@@ -393,9 +508,14 @@ async function onUserText(ctx) {
     await replyWithModes(ctx, "❌ Нічого релевантного не знайшов у базі.");
     return true;
   }
+
   await replyWithModes(ctx, "✨ Топ-3 варіанти:");
   for (const p of res.topItems.slice(0, 3)) {
-    await sendPerfumeCard(ctx, p, { notes: false, season: false });
+    await sendPerfumeCard(ctx, p, {
+      notes: false,
+      season: false,
+      reasonText: reasonFromRes(res, p),
+    });
   }
   await replyModeHint(ctx);
   return true;

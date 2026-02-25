@@ -28,8 +28,128 @@ function termVariants(t) {
 }
 
 /* =========================
+   Multilingual helpers (UA/RU/EN)
+========================= */
+function translitCyrToLat(input) {
+  // IMPORTANT: always lower() to support "Виктория" / "ВІКТОРІЯ"
+  const s = String(input || "").toLowerCase();
+  const map = {
+    а: "a",
+    б: "b",
+    в: "v",
+    г: "h",
+    ґ: "g",
+    д: "d",
+    е: "e",
+    є: "ye",
+    ж: "zh",
+    з: "z",
+    и: "y",
+    і: "i",
+    ї: "yi",
+    й: "y",
+    к: "k",
+    л: "l",
+    м: "m",
+    н: "n",
+    о: "o",
+    п: "p",
+    р: "r",
+    с: "s",
+    т: "t",
+    у: "u",
+    ф: "f",
+    х: "kh",
+    ц: "ts",
+    ч: "ch",
+    ш: "sh",
+    щ: "shch",
+    ь: "",
+    ю: "yu",
+    я: "ya",
+
+    // RU extras
+    ё: "yo",
+    ъ: "",
+    ы: "y",
+    э: "e",
+  };
+  return s
+    .split("")
+    .map((ch) => (map[ch] ? map[ch] : ch))
+    .join("");
+}
+
+const BRAND_SYNONYMS = [
+  {
+    key: "victoria's secret",
+    variants: [
+      "victoria secret",
+      "victorias secret",
+      "victoria’s secret",
+      "victoria s secret",
+      "виктория сикрет",
+      "виктория секрет",
+      "вікторія сікрет",
+      "вікторія секрет",
+    ],
+  },
+];
+
+function expandMultilingualTerms(terms) {
+  const out = new Set();
+
+  const push = (x) => {
+    const t = String(x || "").trim();
+    if (t) out.add(t);
+  };
+
+  for (const t of terms || []) {
+    push(t);
+
+    // cyrillic -> translit
+    if (/[А-Яа-яЁёЄєІіЇїҐґ]/.test(t)) {
+      const tr = translitCyrToLat(t);
+      push(tr);
+      push(tr.toLowerCase());
+    }
+  }
+
+  // brand synonyms (both directions)
+  const all = Array.from(out).map((x) => x.toLowerCase());
+  for (const b of BRAND_SYNONYMS) {
+    const key = b.key.toLowerCase();
+    const has =
+      all.some((x) => x.includes(key)) ||
+      b.variants.some((v) =>
+        all.some((x) => x.includes(String(v).toLowerCase())),
+      );
+
+    if (has) {
+      push(b.key);
+      for (const v of b.variants) push(v);
+    }
+  }
+
+  // normalize "victoria secret" -> "victoria's secret"
+  for (const v of Array.from(out)) {
+    const low = v.toLowerCase();
+    if (low.includes("victoria secret")) {
+      push(v.replace(/\bvictoria secret\b/gi, "Victoria's Secret"));
+      push(low.replace(/\bvictoria secret\b/g, "victoria's secret"));
+    }
+  }
+
+  // apostrophes variations
+  for (const v of Array.from(out)) {
+    push(v.replace(/['’]/g, ""));
+  }
+
+  return Array.from(out).slice(0, 40);
+}
+
+/* =========================
    Token-boundary match
-   (щоб "ром" не матчило "ромашка"/"аромат")
 ========================= */
 function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -42,34 +162,34 @@ function hasWholeWord(hay, term) {
   return re.test(hay);
 }
 
+/* =========================
+   Gender detection
+========================= */
+// IMPORTANT: must return: "жіночий" | "чоловічий" | "унісекс"
 function detectForWhomFromText(text) {
   const t = String(text || "").toLowerCase();
 
-  // UA/RU
   if (/(унісекс|унисекс|unisex)/i.test(t)) return "унісекс";
-  if (/(чол(овічі|овічий)?|муж(ской|ские)?|men|male)/i.test(t)) return "чоловіки";
-  if (/(жін(очі|очий)?|жен(ский|ские)?|women|female)/i.test(t)) return "жінки";
+  if (/(чол(овічі|овічий)?|муж(ской|ские)?|men|male)/i.test(t))
+    return "чоловічий";
+  if (/(жін(очі|очий)?|жен(ский|ские)?|women|female)/i.test(t))
+    return "жіночий";
 
   return null;
 }
 
-/* =========================
-   Heuristics: detect gender
-========================= */
 function detectGenderHeuristic(text) {
   const t = norm(text);
-
-  // ua/ru + частково en
-  if (/(^|[\s,;])унісекс|unisex([\s,;]|$)/i.test(t)) return "унісекс";
-  if (/(^|[\s,;])(чолов|муж|men|man)([\s,;]|$)/i.test(t)) return "чоловічий";
-  if (/(^|[\s,;])(жін|жен|women|woman|female)([\s,;]|$)/i.test(t)) return "жіночий";
-
+  if (/(^|[\s,;])(унісекс|unisex)([\s,;]|$)/i.test(t)) return "унісекс";
+  if (/(^|[\s,;])(чолов|муж|men|man|male)([\s,;]|$)/i.test(t))
+    return "чоловічий";
+  if (/(^|[\s,;])(жін|жен|women|woman|female)([\s,;]|$)/i.test(t))
+    return "жіночий";
   return null;
 }
 
 /* =========================
-   Heuristics: tokens from user text
-   (щоб не було пустого ontology -> однакові результати)
+   Meaningful tokens fallback
 ========================= */
 const STOP = new Set(
   [
@@ -115,7 +235,6 @@ function extractMeaningfulTokens(text, { max = 12 } = {}) {
   for (const p of parts) {
     if (p.length < 4) continue;
     if (STOP.has(p)) continue;
-    // відсікаємо чисті числа/коди
     if (/^\d+$/.test(p)) continue;
     tokens.push(p);
     if (tokens.length >= max) break;
@@ -186,7 +305,6 @@ min_confidence: 0.6 за замовчуванням (нижче якщо неч�
     temperature: 0.1,
   });
 
-  // heuristic gender overrides (найважливіше)
   const g = detectGenderHeuristic(userText);
 
   const out = {
@@ -203,17 +321,25 @@ min_confidence: 0.6 за замовчуванням (нижче якщо неч�
       typeof obj.min_confidence === "number" ? obj.min_confidence : 0.6,
   };
 
-  // якщо LLM повернув майже пусто — добиваємо термами з тексту,
-  // інакше ти завжди будеш отримувати один і той самий топ з перших рядків БД
+  // multilingual expansions (UA/RU/EN + translit + brand aliases)
+  out.note_terms = uniq(expandMultilingualTerms(out.note_terms), 24);
+  out.include_terms = uniq(expandMultilingualTerms(out.include_terms), 24);
+  out.season = uniq(expandMultilingualTerms(out.season), 8);
+  out.type = uniq(expandMultilingualTerms(out.type), 8);
+
   const termsCount =
     out.note_terms.length +
     out.include_terms.length +
     out.season.length +
     out.type.length;
 
+  // if LLM returned empty -> fallback tokens from text (prevents same top every time)
   if (termsCount === 0) {
     out.include_terms = uniq(
-      [...out.include_terms, ...extractMeaningfulTokens(userText, { max: 10 })],
+      expandMultilingualTerms([
+        ...out.include_terms,
+        ...extractMeaningfulTokens(userText, { max: 10 }),
+      ]),
       24,
     );
     out.search_mode = "fallback";
@@ -225,7 +351,6 @@ min_confidence: 0.6 за замовчуванням (нижче якщо неч�
 
 /* =========================
    1b) Reference profile from perfume name
-   (для "схоже на X", коли X не з БД)
 ========================= */
 const RefSchema = {
   type: "object",
@@ -284,11 +409,19 @@ async function inferReferenceProfile(perfumeNameText) {
     confidence: typeof obj.confidence === "number" ? obj.confidence : 0.4,
   };
 
-  // завжди додамо токени з назви, щоб не було пусто
+  // always add tokens from title to avoid empty profile
   out.include_terms = uniq(
-    [...out.include_terms, ...extractMeaningfulTokens(perfumeNameText, { max: 10 })],
+    expandMultilingualTerms([
+      ...out.include_terms,
+      ...extractMeaningfulTokens(perfumeNameText, { max: 10 }),
+    ]),
     18,
   );
+
+  // multilingual expansions for ref-profile too
+  out.note_terms = uniq(expandMultilingualTerms(out.note_terms), 18);
+  out.season = uniq(expandMultilingualTerms(out.season), 6);
+  out.type = uniq(expandMultilingualTerms(out.type), 6);
 
   return out;
 }
@@ -356,17 +489,19 @@ function buildCandidateSQLFromOntology(q) {
 
 function normalizeRowGender(rowForWhomRaw) {
   const fw = norm(rowForWhomRaw);
-  const isMale = fw.includes("чолов") || fw.includes("male") || fw.includes("men");
-  const isFemale = fw.includes("жін") || fw.includes("female") || fw.includes("women");
+  const isMale =
+    fw.includes("чолов") || fw.includes("male") || fw.includes("men");
+  const isFemale =
+    fw.includes("жін") || fw.includes("female") || fw.includes("women");
   const isUnisex = fw.includes("унісекс") || fw.includes("unisex");
   return { isMale, isFemale, isUnisex, raw: fw };
 }
 
 /**
- * ✅ СТАТЬ — найсильніший фільтр
- * Якщо в запиті "чоловічий" -> дозволяємо тільки male або unisex.
- * Якщо "жіночий" -> female або unisex.
- * Якщо "унісекс" -> тільки unisex.
+ * ✅ Gender is hard filter:
+ * - "чоловічий" -> male OR unisex
+ * - "жіночий" -> female OR unisex
+ * - "унісекс" -> only unisex
  */
 function genderAllowed(rowForWhomRaw, queryForWhom) {
   if (!queryForWhom) return true;
@@ -378,12 +513,6 @@ function genderAllowed(rowForWhomRaw, queryForWhom) {
   return true;
 }
 
-/**
- * 🔥 Scoring
- * Підсилюємо keywords/notes, але додатково:
- * - якщо queryForWhom заданий і кандидат не підходить -> кандидата ВЖЕ відсікаємо (genderAllowed)
- * - якщо кандидат "точно чоловічий", а запит чоловічий -> маленький бонус
- */
 function scoreCandidateByKeywords(row, ontology) {
   const hayKeywords = norm(row.keywords);
   const hayNotes = norm(row.notes);
@@ -418,10 +547,10 @@ function scoreCandidateByKeywords(row, ontology) {
     if (kwHit && noteHit) score += 3;
   }
 
-  // якщо запит має note_terms, але в кандидата notes порожній — мінус
+  // if query has note_terms but row notes empty -> penalty
   if ((ontology.note_terms || []).length && !hayNotes) score -= 6;
 
-  // маленький бонус за точну стать
+  // small bonus for exact gender match
   if (ontology.for_whom) {
     const g = normalizeRowGender(row.for_whom);
     if (ontology.for_whom === "чоловічий" && g.isMale && !g.isFemale) score += 6;
@@ -432,6 +561,11 @@ function scoreCandidateByKeywords(row, ontology) {
   return score;
 }
 
+/**
+ * ✅ IMPORTANT FIX:
+ * - If query has terms and SQL found nothing => return [] (no fallback pool)
+ * - fallback pool only for truly empty/general query
+ */
 function retrieveCandidates(q, { limitCandidates = 80 } = {}) {
   let rows = [];
   try {
@@ -441,7 +575,14 @@ function retrieveCandidates(q, { limitCandidates = 80 } = {}) {
     rows = [];
   }
 
-  // fallback pool
+  const termsCount =
+    (q.note_terms || []).length +
+    (q.include_terms || []).length +
+    (q.season || []).length +
+    (q.type || []).length;
+
+  if (!rows.length && termsCount > 0) return [];
+
   if (!rows.length) {
     rows = db.prepare(`${selectSQL()} LIMIT 1800`).all();
   }
@@ -450,7 +591,7 @@ function retrieveCandidates(q, { limitCandidates = 80 } = {}) {
   const noteTerms = q.note_terms || [];
 
   const scored = rows
-    .filter((r) => genderAllowed(r.for_whom, q.for_whom)) // ✅ стать — жорстко
+    .filter((r) => genderAllowed(r.for_whom, q.for_whom))
     .map((r) => {
       const hayAll = rowText(r);
 
@@ -465,7 +606,7 @@ function retrieveCandidates(q, { limitCandidates = 80 } = {}) {
         }
       }
 
-      // якщо є note_terms — хоча б 1 має бути знайдений
+      // if note_terms exist -> require at least one match anywhere
       if (noteTerms.length) {
         let ok = false;
         for (const tt of noteTerms) {
@@ -496,7 +637,46 @@ function retrieveCandidates(q, { limitCandidates = 80 } = {}) {
 }
 
 /* =========================
-   3) Rerank top-3 (json_schema safe)
+   Reasons helper (fallback if LLM doesn't provide)
+========================= */
+function buildReasonFromOntology(perfume, ontology) {
+  const hits = [];
+
+  const hay = norm(
+    [
+      perfume?.name,
+      perfume?.type,
+      perfume?.for_whom,
+      perfume?.season,
+      perfume?.notes,
+      perfume?.keywords,
+      perfume?.description,
+    ].join(" | "),
+  );
+
+  const terms = [
+    ...(ontology?.note_terms || []),
+    ...(ontology?.include_terms || []),
+    ...(ontology?.season || []),
+    ...(ontology?.type || []),
+  ].slice(0, 24);
+
+  for (const tRaw of terms) {
+    const t = norm(tRaw);
+    if (!t) continue;
+    const hit = t.length <= 3 ? hasWholeWord(hay, t) : hay.includes(t);
+    if (hit) hits.push(tRaw);
+    if (hits.length >= 4) break;
+  }
+
+  if (ontology?.for_whom) hits.push(`стать: ${ontology.for_whom}`);
+
+  if (!hits.length) return "";
+  return `Підійшло по запиту: ${[...new Set(hits)].slice(0, 5).join(", ")}`;
+}
+
+/* =========================
+   3) Rerank top-3 (schema-safe)
 ========================= */
 const RerankSchema = {
   type: "object",
@@ -553,27 +733,19 @@ async function rerankTop3(userText, ontology, candidates) {
     candidate_list: candidates.map(compactCandidate),
   };
 
-  const obj = await chatJSONSchema(sys, JSON.stringify(payload).slice(0, 20000), {
-    name: "rerank_top3",
-    schema: RerankSchema,
-    temperature: 0.2,
-  });
+  const obj = await chatJSONSchema(
+    sys,
+    JSON.stringify(payload).slice(0, 20000),
+    { name: "rerank_top3", schema: RerankSchema, temperature: 0.2 },
+  );
 
   const allowed = new Set(candidates.map((c) => Number(c.id)));
 
-  let picked = (obj.picked_ids || [])
+  let picked = (obj?.picked_ids || [])
     .map(Number)
     .filter((id) => allowed.has(id));
 
   picked = [...new Set(picked)].slice(0, 3);
-
-  const reasons_by_id = {};
-  const reasonsArr = Array.isArray(obj.reasons) ? obj.reasons : [];
-  for (const r of reasonsArr) {
-    const id = Number(r?.id);
-    const reason = String(r?.reason || "").trim();
-    if (allowed.has(id) && reason) reasons_by_id[String(id)] = reason;
-  }
 
   // guarantee 3
   if (picked.length < 3) {
@@ -590,21 +762,24 @@ async function rerankTop3(userText, ontology, candidates) {
     picked = candidates.slice(0, 3).map((c) => Number(c.id));
   }
 
+  const reasons_by_id = {};
+  for (const rr of obj?.reasons || []) {
+    const id = Number(rr?.id);
+    const reason = String(rr?.reason || "").trim();
+    if (allowed.has(id) && reason) reasons_by_id[String(id)] = reason;
+  }
+
   return { picked_ids: picked.slice(0, 3), reasons_by_id };
 }
 
 /* =========================
    Detect "looks like perfume name"
-   (без явних фільтрів, без ком, без "чоловічі/зима/ноти" тощо)
 ========================= */
 function looksLikePerfumeName(userText) {
   const t = String(userText || "").trim();
   if (t.length < 4) return false;
-
-  // якщо є коми/перерахування — це вже скоріше фільтри
   if (t.includes(",")) return false;
 
-  // якщо явно є filter-слова
   const low = norm(t);
   if (
     low.includes("чолов") ||
@@ -619,90 +794,53 @@ function looksLikePerfumeName(userText) {
   )
     return false;
 
-  // якщо схоже на назву (2+ слів або з апострофом/брендом)
   const words = low.split(" ").filter(Boolean);
   return words.length >= 2;
 }
 
 /* =========================
-   Full pipeline
+   Full pipeline (TOP-3)
 ========================= */
-async function smartSearchPipeline(userText, { limitCandidates = 120 } = {}) {
-  // 1) базове розуміння запиту
+async function smartSearchPipeline(
+  userText,
+  { limitCandidates = 120, forceForWhom = null } = {},
+) {
   let ontology = await understandQuery(userText);
 
-  // 2) якщо це виглядає як назва аромату — зробимо reference профіль і підмішаємо терми
+  // allow external forced gender (from flow)
+  if (forceForWhom && !ontology.for_whom) ontology.for_whom = forceForWhom;
+
+  // reference profile if text looks like perfume name
   if (looksLikePerfumeName(userText) && ontology.intent !== "find") {
     const ref = await inferReferenceProfile(userText);
 
-    // якщо користувач НЕ задав стать явно — беремо з ref
     if (!ontology.for_whom && ref.for_whom) ontology.for_whom = ref.for_whom;
 
-    ontology.note_terms = uniq([...ontology.note_terms, ...ref.note_terms], 24);
+    ontology.note_terms = uniq(
+      expandMultilingualTerms([...ontology.note_terms, ...ref.note_terms]),
+      24,
+    );
     ontology.include_terms = uniq(
-      [...ontology.include_terms, ...ref.include_terms],
+      expandMultilingualTerms([...ontology.include_terms, ...ref.include_terms]),
       24,
     );
     ontology.exclude_terms = uniq(
-      [...ontology.exclude_terms, ...ref.exclude_terms],
+      expandMultilingualTerms([...ontology.exclude_terms, ...ref.exclude_terms]),
       24,
     );
-    ontology.season = uniq([...ontology.season, ...ref.season], 8);
-    ontology.type = uniq([...ontology.type, ...ref.type], 8);
+    ontology.season = uniq(
+      expandMultilingualTerms([...ontology.season, ...ref.season]),
+      8,
+    );
+    ontology.type = uniq(
+      expandMultilingualTerms([...ontology.type, ...ref.type]),
+      8,
+    );
 
-    // якщо ref більш впевнений — піднімаємо min_confidence
     ontology.min_confidence = Math.max(
       ontology.min_confidence || 0.4,
       ref.confidence || 0.4,
     );
-  }
-
-  // 3) retrieval
-  const candidates = retrieveCandidates(ontology, { limitCandidates });
-
-  if (!candidates.length) {
-    return {
-      ontology,
-      candidates_count: 0,
-      topItems: [],
-      reasons_by_id: {},
-    };
-  }
-
-  // 4) rerank top-3
-  const rerank = await rerankTop3(userText, ontology, candidates);
-
-  const byId = new Map(candidates.map((c) => [Number(c.id), c]));
-  const topItems = (rerank.picked_ids || [])
-    .map((id) => byId.get(Number(id)))
-    .filter(Boolean)
-    .slice(0, 3);
-
-  return {
-    ontology,
-    candidates_count: candidates.length,
-    topItems,
-    reasons_by_id: rerank.reasons_by_id || {},
-  };
-}
-
-/* =========================
-   TOP-N PIPELINE
-========================= */
-async function smartSearchTopN(userText, topN, { limitCandidates = 160 } = {}) {
-  let ontology = await understandQuery(userText);
-
-  // якщо це виглядає як назва — зробимо профіль
-  if (looksLikePerfumeName(userText)) {
-    const ref = await inferReferenceProfile(userText);
-    if (!ontology.for_whom && ref.for_whom) ontology.for_whom = ref.for_whom;
-    ontology.note_terms = uniq([...ontology.note_terms, ...ref.note_terms], 24);
-    ontology.include_terms = uniq(
-      [...ontology.include_terms, ...ref.include_terms],
-      24,
-    );
-    ontology.season = uniq([...ontology.season, ...ref.season], 8);
-    ontology.type = uniq([...ontology.type, ...ref.type], 8);
   }
 
   const candidates = retrieveCandidates(ontology, { limitCandidates });
@@ -711,7 +849,71 @@ async function smartSearchTopN(userText, topN, { limitCandidates = 160 } = {}) {
     return { ontology, candidates_count: 0, topItems: [], reasons_by_id: {} };
   }
 
-  // rerank TOP-N
+  const rerank = await rerankTop3(userText, ontology, candidates);
+
+  const byId = new Map(candidates.map((c) => [Number(c.id), c]));
+  const topItems = (rerank.picked_ids || [])
+    .map((id) => byId.get(Number(id)))
+    .filter(Boolean)
+    .slice(0, 3);
+
+  const reasons_by_id = { ...(rerank.reasons_by_id || {}) };
+  for (const p of topItems) {
+    const id = String(p.id);
+    if (!reasons_by_id[id]) {
+      const r = buildReasonFromOntology(p, ontology);
+      if (r) reasons_by_id[id] = r;
+    }
+  }
+
+  return {
+    ontology,
+    candidates_count: candidates.length,
+    topItems,
+    reasons_by_id,
+  };
+}
+
+/* =========================
+   TOP-N pipeline
+========================= */
+async function smartSearchTopN(
+  userText,
+  topN,
+  { limitCandidates = 160, forceForWhom = null } = {},
+) {
+  let ontology = await understandQuery(userText);
+
+  if (forceForWhom && !ontology.for_whom) ontology.for_whom = forceForWhom;
+
+  if (looksLikePerfumeName(userText)) {
+    const ref = await inferReferenceProfile(userText);
+    if (!ontology.for_whom && ref.for_whom) ontology.for_whom = ref.for_whom;
+
+    ontology.note_terms = uniq(
+      expandMultilingualTerms([...ontology.note_terms, ...ref.note_terms]),
+      24,
+    );
+    ontology.include_terms = uniq(
+      expandMultilingualTerms([...ontology.include_terms, ...ref.include_terms]),
+      24,
+    );
+    ontology.season = uniq(
+      expandMultilingualTerms([...ontology.season, ...ref.season]),
+      8,
+    );
+    ontology.type = uniq(
+      expandMultilingualTerms([...ontology.type, ...ref.type]),
+      8,
+    );
+  }
+
+  const candidates = retrieveCandidates(ontology, { limitCandidates });
+
+  if (!candidates.length) {
+    return { ontology, candidates_count: 0, topItems: [], reasons_by_id: {} };
+  }
+
   const sys = `
 Ти — професійний консультант парфумерії.
 Обери ТОП-${topN} найбільш релевантних ароматів зі списку.
@@ -755,7 +957,10 @@ async function smartSearchTopN(userText, topN, { limitCandidates = 160 } = {}) {
 
   const allowed = new Set(candidates.map((c) => Number(c.id)));
 
-  let picked = (obj?.picked_ids || []).map(Number).filter((id) => allowed.has(id));
+  let picked = (obj?.picked_ids || [])
+    .map(Number)
+    .filter((id) => allowed.has(id));
+
   picked = [...new Set(picked)].slice(0, topN);
 
   if (picked.length < topN) {
@@ -769,21 +974,31 @@ async function smartSearchTopN(userText, topN, { limitCandidates = 160 } = {}) {
   }
 
   const byId = new Map(candidates.map((c) => [Number(c.id), c]));
-  const topItems = picked.map((id) => byId.get(Number(id))).filter(Boolean).slice(0, topN);
+  const topItems = picked
+    .map((id) => byId.get(Number(id)))
+    .filter(Boolean)
+    .slice(0, topN);
+
+  const reasons_by_id = {};
+  for (const p of topItems) {
+    const r = buildReasonFromOntology(p, ontology);
+    if (r) reasons_by_id[String(p.id)] = r;
+  }
 
   return {
     ontology,
     candidates_count: candidates.length,
     topItems,
-    reasons_by_id: {},
+    reasons_by_id,
   };
 }
 
 module.exports = {
   understandQuery,
+  inferReferenceProfile,
   retrieveCandidates,
   rerankTop3,
   smartSearchPipeline,
   smartSearchTopN,
-  detectForWhomFromText, // ✅ ДОДАТИ
+  detectForWhomFromText,
 };
