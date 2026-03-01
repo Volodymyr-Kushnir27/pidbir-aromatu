@@ -16,7 +16,7 @@ function adminMenuKeyboard() {
 function userMenuKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("✨ Підбір аромату", ACTIONS.USER_PICK)],
-    [Markup.button.callback("📄 Ноти", ACTIONS.USER_NOTES)],
+    // [Markup.button.callback("📄 Ноти", ACTIONS.USER_NOTES)],
   ]);
 }
 
