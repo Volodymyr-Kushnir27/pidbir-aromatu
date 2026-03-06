@@ -5,10 +5,16 @@ function rerankTopK(candidates, profile, targetName = "", topK = 3) {
   const filtered = [];
 
   for (const item of candidates || []) {
-    const key = norm(`${item.brand || ""} ${item.name || ""}`);
+    const key = norm(`${item.number_code || ""}|${item.name || ""}`);
     if (!key) continue;
     if (seen.has(key)) continue;
-    if (targetName && norm(item.name) === norm(targetName)) continue;
+
+    const itemName = norm(item.name || "");
+    const baseName = norm(targetName || "");
+
+    if (baseName && itemName && itemName === baseName) {
+      continue;
+    }
 
     seen.add(key);
     filtered.push(item);

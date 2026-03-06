@@ -11,7 +11,7 @@ const { Telegraf } = require("telegraf");
 
 const { BOT_TOKEN, ADMINS_PATH, USERS_PATH, ACTIONS } = require("./config");
 const { getRole } = require("./middleware/auth");
-
+const { onSimilarAction } = require("./flows/similarFlow");
 const adminsStore = require("./storage/adminsStore");
 const usersStore = require("./storage/usersStore");
 
@@ -240,6 +240,16 @@ bot.on("callback_query", async (ctx) => {
       disableMode(ctx);
     } catch {}
     return ctx.reply("✅ Режим вимкнено. Напишіть /start.");
+  }
+  
+  if (String(data).startsWith("SIMILAR:")) {
+    const perfumeId = Number(String(data).split(":")[1] || 0);
+
+    if (!perfumeId) {
+      return ctx.reply("❌ Некоректний ID аромату.");
+    }
+
+    return onSimilarAction(ctx, perfumeId);
   }
 
   if (String(data).startsWith("ADMIN_")) {

@@ -37,8 +37,18 @@ function shareContactKeyboard() {
     .oneTime();
 }
 
+function perfumeCardKeyboard(item) {
+  const id = item?.id;
+  if (!id) return undefined;
+
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("🔁 Схожі", `SIMILAR:${id}`)],
+  ]);
+}
+
 module.exports = {
   adminMenuKeyboard,
   userMenuKeyboard,
   shareContactKeyboard,
+  perfumeCardKeyboard,
 };
