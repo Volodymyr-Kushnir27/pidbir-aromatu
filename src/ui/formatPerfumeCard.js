@@ -33,18 +33,18 @@ function genderToUa(gender) {
 function buildPerfumeCaption(item, options = {}) {
   const name = item.name || "Без назви";
 
-  const code = item.number_code ? `Код: ${item.number_code}\n` : "";
-  const type = item.category ? `Тип: ${item.category}\n` : "";
-  const gender = `Для кого: ${genderToUa(item.gender)}\n`;
+  const code = item.number_code ? `🔢 Код: ${item.number_code}\n` : "";
+  const type = item.category ? `🧴 Тип: ${item.category}\n` : "";
+  const gender = `👤 Для кого: ${genderToUa(item.gender)}\n`;
 
   const season =
-    options.season && item.season ? `Сезон: ${item.season}\n` : "";
+    options.season && item.season ? `🍂 Сезон: ${item.season}\n` : "";
 
   const notes =
-    options.notes && item.notes ? `Ноти: ${truncate(item.notes, 260)}\n` : "";
+    options.notes && item.notes ? `🌿 Ноти: ${truncate(item.notes, 260)}\n` : "";
 
   const accords = item.accords
-    ? `Напрям: ${truncate(item.accords, 180)}\n`
+    ? `✨ Напрям: ${truncate(item.accords, 180)}\n`
     : "";
 
   const desc = item.short_desc

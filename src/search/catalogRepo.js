@@ -17,6 +17,12 @@ function normalizeCode(input) {
     .replace(/Х/g, "X");
 }
 
+function extractNumericCode(input) {
+  const code = normalizeCode(input);
+  const m = code.match(/^(\d{1,4})/);
+  return m ? m[1] : "";
+}
+
 function mapRow(row) {
   if (!row) return null;
 
@@ -135,10 +141,8 @@ function findByNameLike(text, limit = 20) {
 
 function looksLikePerfumeCode(text) {
   const raw = normalizeCode(text);
-
   if (!raw) return false;
-
-  return /^[0-9]{1,4}[A-ZА-ЯІЇЄҐ]?$/.test(raw);
+  return /^\d{1,4}[A-ZА-ЯІЇЄҐ]?$/.test(raw);
 }
 
 function splitCodes(value) {
@@ -148,36 +152,7 @@ function splitCodes(value) {
     .filter(Boolean);
 }
 
-function findByNumberCode(input) {
-  const code = normalizeCode(input);
-  if (!code) return null;
-
-  const exact = db
-    .prepare(`
-      SELECT
-        id,
-        photo,
-        name,
-        number_code,
-        number_codes,
-        type,
-        for_whom,
-        season,
-        occasion,
-        age,
-        notes,
-        keywords,
-        version,
-        description,
-        quote
-      FROM perfumes
-      WHERE UPPER(REPLACE(number_code, 'А', 'A')) = ?
-      LIMIT 1
-    `)
-    .get(code);
-
-  if (exact) return mapRow(exact);
-
+function getAllWithCodes() {
   const rows = db
     .prepare(`
       SELECT
@@ -197,19 +172,54 @@ function findByNumberCode(input) {
         description,
         quote
       FROM perfumes
-      WHERE number_codes IS NOT NULL
-        AND TRIM(number_codes) <> ''
+      WHERE (number_code IS NOT NULL AND TRIM(number_code) <> '')
+         OR (number_codes IS NOT NULL AND TRIM(number_codes) <> '')
     `)
     .all();
 
-  for (const row of rows) {
-    const codes = splitCodes(row.number_codes);
-    if (codes.includes(code)) {
-      return mapRow(row);
+  return rows.map(mapRow);
+}
+
+function findByNumberCode(input) {
+  const code = normalizeCode(input);
+  if (!code) return null;
+
+  const all = getAllWithCodes();
+
+  for (const row of all) {
+    const mainCode = normalizeCode(row.number_code);
+    const extraCodes = splitCodes(row.number_codes);
+
+    if (mainCode === code || extraCodes.includes(code)) {
+      return row;
     }
   }
 
   return null;
+}
+
+function findAllByNumericCode(input) {
+  const num = extractNumericCode(input);
+  if (!num) return [];
+
+  const all = getAllWithCodes();
+  const out = [];
+
+  for (const row of all) {
+    const mainCode = normalizeCode(row.number_code);
+    const extraCodes = splitCodes(row.number_codes);
+    const allCodes = [mainCode, ...extraCodes].filter(Boolean);
+
+    const matched = allCodes.some((c) => extractNumericCode(c) === num);
+    if (matched) out.push(row);
+  }
+
+  const uniqMap = new Map();
+  for (const item of out) {
+    uniqMap.set(item.id, item);
+  }
+
+  return [...uniqMap.values()];
 }
 
 module.exports = {
@@ -217,6 +227,8 @@ module.exports = {
   getPerfumeById,
   findByNameLike,
   findByNumberCode,
+  findAllByNumericCode,
   looksLikePerfumeCode,
   normalizeCode,
+  extractNumericCode,
 };
