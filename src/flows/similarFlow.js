@@ -6,6 +6,12 @@ const { rerankTopK } = require("../search/candidateRerank");
 const { getPerfumeById } = require("../search/catalogRepo");
 const { sendPerfumeCard } = require("./sendPerfumeCard");
 const { SEARCH } = require("../config");
+const { moreSimilarKeyboard } = require("../ui/keyboards");
+const {
+  setSimilarState,
+  getSimilarState,
+  clearSimilarState,
+} = require("./similarState");
 
 function mergeGptReasons(items, gptSelected = []) {
   const byId = new Map(gptSelected.map((x) => [Number(x.id), x]));
@@ -120,6 +126,48 @@ function buildAnalysisFromPerfume(base) {
   };
 }
 
+function decorateItem(item) {
+  const why = Array.isArray(item.why_selected) ? item.why_selected : [];
+  const assistantComment = String(item.assistant_comment || "").trim();
+
+  const reasonBlock = why.length
+    ? `\n\n💡 Чому обрано:\n• ${why.join("\n• ")}`
+    : `\n\n💡 Чому обрано:\n• близький за загальним характером`;
+
+  const commentBlock = assistantComment
+    ? `\n\n🗣 ${assistantComment}`
+    : "";
+
+  const metaBlock = renderMetaComment(item);
+
+  return {
+    ...item,
+    short_desc: `${item.short_desc || ""}${reasonBlock}${commentBlock}${metaBlock}`.trim(),
+  };
+}
+
+async function sendBatch(ctx, baseId, items, offset = 0, batchSize = 3) {
+  const batch = items.slice(offset, offset + batchSize);
+
+  for (const item of batch) {
+    await sendPerfumeCard(ctx, decorateItem(item), {
+      notes: false,
+      season: false,
+    });
+  }
+
+  const nextOffset = offset + batch.length;
+  const hasMore = nextOffset < items.length;
+
+  if (hasMore) {
+    await ctx.reply("➡️ Є ще схожі варіанти:", {
+      reply_markup: moreSimilarKeyboard(baseId).reply_markup,
+    });
+  }
+
+  return nextOffset;
+}
+
 async function onSimilarAction(ctx, perfumeId) {
   const base = getPerfumeById(Number(perfumeId));
 
@@ -159,20 +207,15 @@ async function onSimilarAction(ctx, perfumeId) {
     return;
   }
 
-  let top = rerankTopK(
-    candidates,
-    searchProfile,
-    base.name,
-    SEARCH.TOP_K || 3,
-  );
+  let allItems = rerankTopK(candidates, searchProfile, base.name, 50);
 
   try {
     const gptSelected = await rerankAndExplain({
-      userText: `Знайди 3 найбільш схожі аромати на ${base.name}`,
+      userText: `Знайди найбільш схожі аромати на ${base.name}`,
       analysis,
       searchProfile,
       candidates: candidates.slice(0, 10),
-      topK: SEARCH.TOP_K || 3,
+      topK: Math.min(10, candidates.length),
     });
 
     if (Array.isArray(gptSelected) && gptSelected.length) {
@@ -182,53 +225,95 @@ async function onSimilarAction(ctx, perfumeId) {
       );
 
       if (selectedItems.length) {
-        top = selectedIds
+        allItems = selectedIds
           .map((id) => selectedItems.find((x) => Number(x.id) === id))
-          .filter(Boolean)
-          .slice(0, SEARCH.TOP_K || 3);
+          .filter(Boolean);
 
-        top = mergeGptReasons(top, gptSelected);
+        allItems = mergeGptReasons(allItems, gptSelected);
       }
     }
   } catch (e) {
     console.error("rerankAndExplain(similar) error:", e);
   }
 
-  top = attachReasons(top, searchProfile);
+  allItems = attachReasons(allItems, searchProfile);
 
-  if (!top.length) {
+  if (!allItems.length) {
     await ctx.reply("❌ Не вдалося відібрати схожі аромати.");
     return;
   }
+
+  setSimilarState(ctx.chat.id, base.id, {
+    items: allItems,
+    offset: 0,
+    sentIds: [],
+  });
 
   await ctx.reply(`✨ Найбільш схожі на **${base.name}**:`, {
     parse_mode: "Markdown",
   });
 
-  for (const item of top) {
-    const why = Array.isArray(item.why_selected) ? item.why_selected : [];
-    const assistantComment = String(item.assistant_comment || "").trim();
+  const nextOffset = await sendBatch(ctx, base.id, allItems, 0, 3);
 
-    const reasonBlock = why.length
-      ? `\n\n💡 Чому обрано:\n• ${why.join("\n• ")}`
-      : `\n\n💡 Чому обрано:\n• близький за загальним характером`;
+  setSimilarState(ctx.chat.id, base.id, {
+    items: allItems,
+    offset: nextOffset,
+    sentIds: allItems.slice(0, nextOffset).map((x) => x.id),
+  });
 
-    const commentBlock = assistantComment
-      ? `\n\n🗣 ${assistantComment}`
-      : "";
-
-    const metaBlock = renderMetaComment(item);
-
-    const payload = {
-      ...item,
-      short_desc: `${item.short_desc || ""}${reasonBlock}${commentBlock}${metaBlock}`.trim(),
-    };
-
-    await sendPerfumeCard(ctx, payload, {
-      notes: false,
-      season: false,
-    });
+  if (nextOffset >= allItems.length) {
+    clearSimilarState(ctx.chat.id, base.id);
   }
 }
 
-module.exports = { onSimilarAction };
+async function onSimilarMoreAction(ctx, perfumeId) {
+  const base = getPerfumeById(Number(perfumeId));
+  const saved = getSimilarState(ctx.chat.id, Number(perfumeId));
+
+  if (!saved || !Array.isArray(saved.items) || !saved.items.length) {
+    await ctx.reply("ℹ️ Більше схожих варіантів немає. Натисніть `Схожі` ще раз.", {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  const remaining = saved.items.filter((x) => !saved.sentIds.includes(x.id));
+
+  if (!remaining.length) {
+    clearSimilarState(ctx.chat.id, Number(perfumeId));
+    await ctx.reply("✅ Це були всі схожі варіанти.");
+    return;
+  }
+
+  if (base) {
+    await ctx.reply(`🔎 Показую ще схожі на **${base.name}**:`, {
+      parse_mode: "Markdown",
+    });
+  }
+
+  const nextOffset = await sendBatch(
+    ctx,
+    Number(perfumeId),
+    saved.items,
+    saved.offset,
+    3,
+  );
+
+  const nextSent = saved.items.slice(0, nextOffset).map((x) => x.id);
+
+  setSimilarState(ctx.chat.id, Number(perfumeId), {
+    items: saved.items,
+    offset: nextOffset,
+    sentIds: nextSent,
+  });
+
+  if (nextOffset >= saved.items.length) {
+    clearSimilarState(ctx.chat.id, Number(perfumeId));
+    await ctx.reply("✅ Це були всі схожі варіанти.");
+  }
+}
+
+module.exports = {
+  onSimilarAction,
+  onSimilarMoreAction,
+};

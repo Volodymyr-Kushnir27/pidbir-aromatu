@@ -3,6 +3,7 @@ require("dotenv").config();
 process.on("unhandledRejection", (e) => {
   console.error("unhandledRejection:", e);
 });
+
 process.on("uncaughtException", (e) => {
   console.error("uncaughtException:", e);
 });
@@ -11,7 +12,7 @@ const { Telegraf } = require("telegraf");
 
 const { BOT_TOKEN, ADMINS_PATH, USERS_PATH, ACTIONS } = require("./config");
 const { getRole } = require("./middleware/auth");
-const { onSimilarAction } = require("./flows/similarFlow");
+
 const adminsStore = require("./storage/adminsStore");
 const usersStore = require("./storage/usersStore");
 
@@ -35,6 +36,13 @@ const {
   disableMode,
 } = require("./flows/perfumeChatFlow");
 
+const {
+  onSimilarAction,
+  onSimilarMoreAction,
+} = require("./flows/similarFlow");
+
+const { onDetailAction } = require("./flows/detailFlow");
+
 if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -46,9 +54,15 @@ bot.catch((err, ctx) => {
   } catch {}
 });
 
+/* =========================
+   Registration State
+========================= */
 const regState = new Map();
 // tgId -> { step: "fio", phone }
 
+/* =========================
+   Helpers
+========================= */
 function safeFrom(ctx) {
   const f = ctx.from || {};
   return {
@@ -90,9 +104,11 @@ function attachTgId(kind, phone, tgId) {
   if (kind === "admin" && typeof adminsStore.attachTgId === "function") {
     return adminsStore.attachTgId(ADMINS_PATH, phone, tgId);
   }
+
   if (kind === "user" && typeof usersStore.attachTgId === "function") {
     return usersStore.attachTgId(USERS_PATH, phone, tgId);
   }
+
   return false;
 }
 
@@ -100,9 +116,11 @@ function setFio(kind, phone, fio) {
   if (kind === "admin" && typeof adminsStore.setFio === "function") {
     return adminsStore.setFio(ADMINS_PATH, phone, fio);
   }
+
   if (kind === "user" && typeof usersStore.setFio === "function") {
     return usersStore.setFio(USERS_PATH, phone, fio);
   }
+
   return false;
 }
 
@@ -134,16 +152,23 @@ async function showHome(ctx) {
   );
 }
 
+/* =========================
+   Commands
+========================= */
 bot.start(async (ctx) => showHome(ctx));
 bot.command("home", async (ctx) => showHome(ctx));
 
 bot.command("myid", async (ctx) => {
   const u = safeFrom(ctx);
+
   return ctx.reply(
     `/start\n\n${u.username}\nId: ${u.id}\nFirst: ${u.first}\nLast: ${u.last}\nLang: ${u.lang}`,
   );
 });
 
+/* =========================
+   Contact registration
+========================= */
 bot.on("contact", async (ctx) => {
   const contact = ctx.message?.contact;
   if (!contact) return;
@@ -169,17 +194,23 @@ bot.on("contact", async (ctx) => {
   return ctx.reply("✍️ Введіть ваше ФІО (Прізвище Ім’я).");
 });
 
+/* =========================
+   Text router
+========================= */
 bot.on("text", async (ctx) => {
   const role = getRole(ctx);
   const tgId = ctx.from?.id;
   const text = String(ctx.message?.text || "").trim();
+
   if (!tgId) return;
 
+  // admin flow
   if (role === "admin") {
     const handledAdmin = await onAdminText(ctx);
     if (handledAdmin) return;
   }
 
+  // registration flow
   const state = regState.get(tgId);
   if (state?.step === "fio") {
     const fio = normalizeFio(text);
@@ -202,6 +233,7 @@ bot.on("text", async (ctx) => {
     return showHome(ctx);
   }
 
+  // manual phone input
   const maybePhone = normalizePhone(text);
   if (maybePhone) {
     const found = findByPhone(maybePhone);
@@ -218,6 +250,7 @@ bot.on("text", async (ctx) => {
     return ctx.reply("✍️ Введіть ваше ФІО (Прізвище Ім’я).");
   }
 
+  // perfume/user flow
   if (role === "admin" || role === "user") {
     const handledUser = await onUserText(ctx);
     if (handledUser) return;
@@ -226,6 +259,9 @@ bot.on("text", async (ctx) => {
   return ctx.reply("Використайте /start щоб відкрити меню.");
 });
 
+/* =========================
+   Callback router
+========================= */
 bot.on("callback_query", async (ctx) => {
   const data = ctx.callbackQuery?.data;
   await safeAnswerCb(ctx);
@@ -233,15 +269,16 @@ bot.on("callback_query", async (ctx) => {
 
   const role = getRole(ctx);
 
-  if (data === ACTIONS.BACK_HOME) return showHome(ctx);
+  if (String(data).startsWith("SIMILAR_MORE:")) {
+    const perfumeId = Number(String(data).split(":")[1] || 0);
 
-  if (data === ACTIONS.EXIT_PICK) {
-    try {
-      disableMode(ctx);
-    } catch {}
-    return ctx.reply("✅ Режим вимкнено. Напишіть /start.");
+    if (!perfumeId) {
+      return ctx.reply("❌ Некоректний ID аромату.");
+    }
+
+    return onSimilarMoreAction(ctx, perfumeId);
   }
-  
+
   if (String(data).startsWith("SIMILAR:")) {
     const perfumeId = Number(String(data).split(":")[1] || 0);
 
@@ -252,8 +289,32 @@ bot.on("callback_query", async (ctx) => {
     return onSimilarAction(ctx, perfumeId);
   }
 
+  if (String(data).startsWith("DETAIL:")) {
+    const perfumeId = Number(String(data).split(":")[1] || 0);
+
+    if (!perfumeId) {
+      return ctx.reply("❌ Некоректний ID аромату.");
+    }
+
+    return onDetailAction(ctx, perfumeId);
+  }
+
+  if (data === ACTIONS.BACK_HOME) {
+    return showHome(ctx);
+  }
+
+  if (data === ACTIONS.EXIT_PICK) {
+    try {
+      disableMode(ctx);
+    } catch {}
+
+    return ctx.reply("✅ Режим вимкнено. Напишіть /start.");
+  }
+
   if (String(data).startsWith("ADMIN_")) {
-    if (role !== "admin") return ctx.reply("⛔ Доступ тільки для адміна.");
+    if (role !== "admin") {
+      return ctx.reply("⛔ Доступ тільки для адміна.");
+    }
 
     const map = {
       ADMIN_ADD_USER: "ADD_USER",
@@ -265,7 +326,10 @@ bot.on("callback_query", async (ctx) => {
     };
 
     const action = map[data];
-    if (!action) return ctx.reply("⚠️ Невідома адмін-дія.");
+    if (!action) {
+      return ctx.reply("⚠️ Невідома адмін-дія.");
+    }
+
     return onAdminAction(ctx, action);
   }
 
@@ -273,12 +337,16 @@ bot.on("callback_query", async (ctx) => {
     if (role !== "admin" && role !== "user") {
       return ctx.reply("⛔ Немає доступу.", shareContactKeyboard());
     }
+
     return onUserPickAction(ctx);
   }
 
   return ctx.reply("⚠️ Невідома дія кнопки.");
 });
 
+/* =========================
+   Launch
+========================= */
 bot.launch().then(() => console.log("Bot started"));
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
