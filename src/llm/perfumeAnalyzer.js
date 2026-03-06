@@ -8,23 +8,25 @@ async function analyzePerfumeIntent(userText) {
 - українською
 - російською
 - змішаною мовою
-- дуже коротко, одним словом
-- код аромату
-- ноту
-- стиль
-- або конкретну назву парфуму
+- коротко
+- по назві аромату
+- по коду
+- по нотах
+- по стилю
+- по ситуації використання
 
 Твоє завдання:
 1. Визначити тип запиту.
-2. Сформувати природну, живу відповідь українською, ніби спілкується досвідчений консультант.
-3. Повернути структурований JSON для пошуку.
+2. Зрозуміти бажаний парфумерний профіль користувача.
+3. Сформувати природну відповідь українською, як живий консультант.
+4. Повернути JSON для подальшого пошуку.
 
 Можливі query_type:
-- "reference_perfume" -> якщо користувач має на увазі конкретний аромат
-- "note_search" -> якщо шукає по ноті / акорду
-- "style_search" -> якщо шукає по стилю / характеру / сезону / статі
-- "code_search" -> якщо це схоже на код аромату
-- "unknown" -> тільки якщо взагалі нічого не зрозуміло
+- "reference_perfume"
+- "note_search"
+- "style_search"
+- "code_search"
+- "unknown"
 
 Поверни JSON у форматі:
 
@@ -37,6 +39,7 @@ async function analyzePerfumeIntent(userText) {
 
   "gender": "male|female|unisex|unknown",
   "seasons": [],
+
   "style": [],
   "notes_top": [],
   "notes_heart": [],
@@ -44,21 +47,42 @@ async function analyzePerfumeIntent(userText) {
   "accords": [],
 
   "search_terms": [],
+
+  "intent_context": {
+    "best_for": [],
+    "projection": "low|medium|strong|unknown",
+    "longevity": "low|medium|long|unknown",
+    "age_group": "young|adult|mature|any|unknown",
+    "image_style": []
+  },
+
   "user_friendly_reply": "",
   "search_hint_text": ""
 }
 
-КРИТИЧНІ ПРАВИЛА:
-- Якщо користувач пише одне слово типу "тютюн", "кавун", "вишня", "ваніль", "аромат з табаком" — це нормальний запит для пошуку. Це НЕ unknown.
-- Якщо користувач пише "свіжий", "солодкий", "шлейфовий", "жіночий", "мужской", "на літо" — це теж нормальний запит.
-- Якщо користувач пише щось схоже на код: 60, 609A, 377А — став query_type="code_search".
-- Не відповідай фразами на кшталт "я не можу запропонувати аромат".
-- Не вимагай уточнення, якщо вже можна шукати по БД.
-- user_friendly_reply має бути короткою, живою, природною відповіддю українською.
-- user_friendly_reply не має бути сухим технічним описом.
-- Не пиши занадто довго: 1-3 речення.
-- Якщо є конкретна нота, стиль або напрям — коротко перефразуй, що саме шукає користувач, і скажи, що зараз підбереш варіанти.
-- Якщо це конкретний аромат, коротко опиши його характер і скажи, що зараз знайдеш схожі.
+ПРАВИЛА:
+- Якщо запит схожий на код: 60, 377A, 609А -> code_search.
+- Якщо є конкретна назва аромату -> reference_perfume.
+- Якщо користувач шукає ноту/акорд -> note_search.
+- Якщо користувач шукає по стилю/сезону/статі/ситуації -> style_search.
+- best_for може включати: daily, office, evening, date, sport, formal, party.
+- projection:
+  - low = легкий, близько до тіла
+  - medium = помітний, але не важкий
+  - strong = шлейфовий, виразний
+- longevity:
+  - low = нестійкий
+  - medium = середня стійкість
+  - long = стійкий / довготривалий
+- age_group:
+  - young = молодіжний
+  - adult = дорослий / універсальний
+  - mature = статусний / зрілий
+  - any = без явної вікової прив’язки
+
+- Не вимагай уточнення, якщо вже можна шукати.
+- Не пиши "я не можу запропонувати".
+- user_friendly_reply = 1-3 речення, природно, без сухої технічної мови.
 `;
 
   const user = `Запит користувача: ${userText}`;
@@ -83,8 +107,15 @@ async function analyzePerfumeIntent(userText) {
       notes_base: [],
       accords: [],
       search_terms: [],
+      intent_context: {
+        best_for: [],
+        projection: "unknown",
+        longevity: "unknown",
+        age_group: "unknown",
+        image_style: [],
+      },
       user_friendly_reply:
-        "Не до кінця зрозумів запит. Напишіть назву аромату, код, ноту або стиль.",
+        "Не до кінця зрозумів запит. Напишіть назву аромату, код, ноти або стиль.",
       search_hint_text: "",
     };
   }
@@ -102,6 +133,17 @@ async function analyzePerfumeIntent(userText) {
     notes_base: Array.isArray(json.notes_base) ? json.notes_base : [],
     accords: Array.isArray(json.accords) ? json.accords : [],
     search_terms: Array.isArray(json.search_terms) ? json.search_terms : [],
+    intent_context: {
+      best_for: Array.isArray(json.intent_context?.best_for)
+        ? json.intent_context.best_for
+        : [],
+      projection: json.intent_context?.projection || "unknown",
+      longevity: json.intent_context?.longevity || "unknown",
+      age_group: json.intent_context?.age_group || "unknown",
+      image_style: Array.isArray(json.intent_context?.image_style)
+        ? json.intent_context.image_style
+        : [],
+    },
     user_friendly_reply:
       json.user_friendly_reply ||
       "Зрозумів запит. Зараз підберу найбільш релевантні варіанти з бази.",

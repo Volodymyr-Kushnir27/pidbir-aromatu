@@ -8,6 +8,8 @@ function compactCandidate(item) {
     category: item.category || "",
     gender: item.gender || "",
     season: item.season || "",
+    occasion: item.occasion || "",
+    age: item.age || "",
     notes: item.notes || "",
     accords: item.accords || "",
     description: item.description || "",
@@ -28,7 +30,7 @@ async function rerankAndExplain({
   const shortCandidates = (candidates || []).slice(0, 10).map(compactCandidate);
 
   const system = `
-Ти парфумерний AI-консультант, який робить фінальний відбір ароматів із вже знайдених кандидатів.
+Ти парфумерний AI-консультант, який робить фінальний відбір ароматів із уже знайдених кандидатів.
 
 Твоє завдання:
 1. Переглянути запит користувача
@@ -36,7 +38,7 @@ async function rerankAndExplain({
 3. Переглянути search profile
 4. Переглянути список кандидатів із БД
 5. Вибрати найкращі ${topK} варіанти
-6. Для кожного написати коротке, людське пояснення українською
+6. Для кожного написати людські пояснення українською
 
 Поверни JSON у форматі:
 
@@ -47,21 +49,33 @@ async function rerankAndExplain({
       "why": [
         "..."
       ],
-      "assistant_comment": "..."
+      "assistant_comment": "...",
+      "match_type": "close_match|style_match|note_match|occasion_match",
+      "confidence": 0.0,
+      "best_for": [],
+      "projection_fit": "low|medium|strong|unknown",
+      "longevity_fit": "low|medium|long|unknown"
     }
   ]
 }
 
 Правила:
-- Обирай саме найрелевантніші варіанти під запит.
-- Орієнтуйся на ноти, стиль, стать, сезон, характер, шлейф, свіжість, солодкість.
-- Якщо користувач шукає по конкретному аромату, підбирай найближчі за настроєм і звучанням.
-- Якщо користувач шукає по ноті чи стилю, підбирай ті, що реально найближчі по профілю.
-- why = 2-3 короткі причини списком.
-- assistant_comment = 1-2 речення, як жива порада консультанта.
-- Не пиши сухо, не використовуй канцелярит.
-- Не пиши загальні фрази без змісту.
-- Не вигадуй того, чого немає у кандидата.
+- Орієнтуйся не тільки на ноти й стиль, а й на:
+  - best_for: daily / office / evening / date / sport / formal / party
+  - projection: low / medium / strong
+  - longevity: low / medium / long
+  - season
+  - age_group
+  - image_style
+- Якщо користувач просить офісний аромат — віддавай більш стримані кандидати.
+- Якщо просить вечірній / побачення — допускай більш щільні, шлейфові, чуттєві варіанти.
+- Якщо просить шлейф — higher priority strong projection.
+- Якщо просить стійкість — higher priority long longevity.
+- why = 2-3 короткі конкретні причини.
+- assistant_comment = 1-2 речення як жива порада консультанта.
+- confidence = число від 0 до 1.
+- Не вигадуй того, чого немає в даних кандидата.
+- Уникай пустих фраз типу "загалом хороший аромат".
 `;
 
   const user = JSON.stringify(

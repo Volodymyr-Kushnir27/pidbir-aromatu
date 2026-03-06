@@ -24,18 +24,24 @@ async function buildSearchProfile(analysis) {
   "style_synonyms": [],
 
   "exclude_tags": [],
-  "raw_terms": []
+  "raw_terms": [],
+
+  "best_for": [],
+  "projection": "low|medium|strong|unknown",
+  "longevity": "low|medium|long|unknown",
+  "age_group": "young|adult|mature|any|unknown",
+  "image_style": []
 }
 
 Правила:
-- Якщо користувач пише українською або російською, додай і англійські відповідники.
-- Якщо користувач пише "кавун" або "арбуз" -> додай "watermelon".
-- Якщо користувач пише "вишня" / "черешня" / "вишнёвый" -> додай "cherry".
-- Якщо користувач пише "морський" / "морской" -> додай "marine", "aquatic", "ozonic".
-- Якщо користувач пише "шлейфовий" / "шлейфовый" -> додай "projection", "sillage", "long lasting".
-- Якщо користувач пише "свіжий" / "свежий" -> додай "fresh", "clean".
-- Якщо користувач пише "солодкий" / "сладкий" -> додай "sweet", "gourmand".
-- Профіль має бути корисним саме для пошуку в БД.
+- Якщо користувач шукає ноту українською або російською, додай англійські відповідники.
+- Якщо користувач шукає стиль, додай пов’язані style-tags.
+- Якщо є ситуація використання — заповни best_for.
+- Якщо є побажання по шлейфу — заповни projection.
+- Якщо є побажання по стійкості — заповни longevity.
+- Якщо є побажання по образу — заповни image_style.
+- Якщо є вік / стиль віку — age_group.
+- search-profile має бути максимально корисним для пошуку та rerank.
 `;
 
   const user = `Ось perfume analysis:\n${JSON.stringify(analysis, null, 2)}`;
@@ -61,6 +67,11 @@ async function buildSearchProfile(analysis) {
       style_synonyms: [],
       exclude_tags: [],
       raw_terms: [],
+      best_for: [],
+      projection: "unknown",
+      longevity: "unknown",
+      age_group: "unknown",
+      image_style: [],
     }
   );
 }

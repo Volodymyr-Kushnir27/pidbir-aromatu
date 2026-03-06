@@ -75,15 +75,60 @@ function mergeGptReasons(items, gptSelected = []) {
     const hit = byId.get(Number(item.id));
     if (!hit) return item;
 
-    const why = Array.isArray(hit.why) ? hit.why : [];
-    const assistantComment = String(hit.assistant_comment || "").trim();
-
     return {
       ...item,
-      why_selected: why,
-      assistant_comment: assistantComment,
+      why_selected: Array.isArray(hit.why) ? hit.why : [],
+      assistant_comment: String(hit.assistant_comment || "").trim(),
+      match_type: hit.match_type || "",
+      confidence:
+        typeof hit.confidence === "number" ? hit.confidence : null,
+      best_for_gpt: Array.isArray(hit.best_for) ? hit.best_for : [],
+      projection_fit: hit.projection_fit || "unknown",
+      longevity_fit: hit.longevity_fit || "unknown",
     };
   });
+}
+
+function renderMetaComment(item) {
+  const parts = [];
+
+  if (item.match_type) {
+    const map = {
+      close_match: "дуже близький загальний збіг",
+      style_match: "сильний збіг по стилю",
+      note_match: "сильний збіг по нотах",
+      occasion_match: "добре підходить під сценарій використання",
+    };
+    parts.push(`🎯 Збіг: ${map[item.match_type] || item.match_type}`);
+  }
+
+  if (item.projection_fit && item.projection_fit !== "unknown") {
+    const map = {
+      low: "легкий",
+      medium: "помірний",
+      strong: "виразний шлейф",
+    };
+    parts.push(`🌬 Шлейф: ${map[item.projection_fit] || item.projection_fit}`);
+  }
+
+  if (item.longevity_fit && item.longevity_fit !== "unknown") {
+    const map = {
+      low: "легка стійкість",
+      medium: "середня стійкість",
+      long: "хороша стійкість",
+    };
+    parts.push(`⏳ Стійкість: ${map[item.longevity_fit] || item.longevity_fit}`);
+  }
+
+  if (Array.isArray(item.best_for_gpt) && item.best_for_gpt.length) {
+    parts.push(`📍 Найкраще для: ${item.best_for_gpt.join(", ")}`);
+  }
+
+  if (typeof item.confidence === "number") {
+    parts.push(`📊 Впевненість: ${Math.round(item.confidence * 100)}%`);
+  }
+
+  return parts.length ? `\n\n${parts.join("\n")}` : "";
 }
 
 async function onUserText(ctx) {
@@ -95,9 +140,6 @@ async function onUserText(ctx) {
 
   await ctx.reply("🔎 Аналізую аромат...");
 
-  /* =========================
-     1. DIRECT SEARCH BY CODE
-  ========================= */
   if (looksLikePerfumeCode(text)) {
     const code = normalizeCode(text);
     const byExactCode = findByNumberCode(code);
@@ -147,9 +189,6 @@ async function onUserText(ctx) {
     return true;
   }
 
-  /* =========================
-     2. GPT ANALYSIS
-  ========================= */
   let analysis;
   try {
     analysis = await analyzePerfumeIntent(text);
@@ -169,12 +208,17 @@ async function onUserText(ctx) {
     (analysis?.notes_heart && analysis.notes_heart.length) ||
     (analysis?.notes_base && analysis.notes_base.length) ||
     (analysis?.style && analysis.style.length) ||
-    (analysis?.accords && analysis.accords.length);
+    (analysis?.accords && analysis.accords.length) ||
+    (analysis?.intent_context?.best_for?.length) ||
+    analysis?.intent_context?.projection !== "unknown" ||
+    analysis?.intent_context?.longevity !== "unknown" ||
+    analysis?.intent_context?.age_group !== "unknown" ||
+    (analysis?.intent_context?.image_style?.length);
 
   if (!hasSearchData) {
     await ctx.reply(
       analysis?.user_friendly_reply ||
-        "🤔 Не до кінця зрозумів запит.\n\nНапишіть:\n• назву аромату\n• код\n• ноти\n• або стиль",
+        "🤔 Не до кінця зрозумів запит.\n\nНапишіть:\n• назву аромату\n• код\n• ноти\n• стиль\n• або ситуацію використання",
     );
     return true;
   }
@@ -203,12 +247,11 @@ async function onUserText(ctx) {
 
   if (!candidates.length) {
     await ctx.reply(
-      "😔 У базі поки не знайшов вдалих збігів.\n\nМожете уточнити:\n• для кого аромат\n• які ноти\n• який стиль\n• або код",
+      "😔 У базі поки не знайшов вдалих збігів.\n\nМожете уточнити:\n• для кого аромат\n• які ноти\n• який стиль\n• на яку ситуацію\n• який шлейф або стійкість",
     );
     return true;
   }
 
-  // локальний fallback top-3
   let top = rerankTopK(
     candidates,
     searchProfile,
@@ -216,7 +259,6 @@ async function onUserText(ctx) {
     SEARCH.TOP_K || 3,
   );
 
-  // GPT rerank/explainer поверх топ-10
   try {
     const gptSelected = await rerankAndExplain({
       userText: text,
@@ -233,7 +275,11 @@ async function onUserText(ctx) {
       );
 
       if (selectedItems.length) {
-        top = selectedItems.slice(0, SEARCH.TOP_K || 3);
+        top = selectedIds
+          .map((id) => selectedItems.find((x) => Number(x.id) === id))
+          .filter(Boolean)
+          .slice(0, SEARCH.TOP_K || 3);
+
         top = mergeGptReasons(top, gptSelected);
       }
     }
@@ -241,11 +287,7 @@ async function onUserText(ctx) {
     console.error("rerankAndExplain error:", e);
   }
 
-  // якщо GPT не дав нормальні пояснення — локальний fallback
-  top = attachReasons(top, searchProfile).map((item) => {
-    if (item.assistant_comment) return item;
-    return item;
-  });
+  top = attachReasons(top, searchProfile);
 
   if (!top.length) {
     await ctx.reply("❌ Схожих варіантів не знайшов.");
@@ -266,9 +308,11 @@ async function onUserText(ctx) {
       ? `\n\n🗣 ${assistantComment}`
       : "";
 
+    const metaBlock = renderMetaComment(item);
+
     const payload = {
       ...item,
-      short_desc: `${item.short_desc || ""}${reasonBlock}${commentBlock}`.trim(),
+      short_desc: `${item.short_desc || ""}${reasonBlock}${commentBlock}${metaBlock}`.trim(),
     };
 
     await sendPerfumeCard(ctx, payload, {
