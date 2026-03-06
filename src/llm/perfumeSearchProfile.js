@@ -7,31 +7,35 @@ async function buildSearchProfile(analysis) {
 Поверни JSON у форматі:
 
 {
+  "query_type": "reference_perfume|note_search|style_search|unknown",
   "gender": "male|female|unisex|unknown",
-  "season": ["spring","summer","autumn","winter"],
+  "season": [],
+
   "notes_include": [],
+  "notes_include_synonyms": [],
+
   "notes_prefer": [],
+  "notes_prefer_synonyms": [],
+
   "accords": [],
+  "accord_synonyms": [],
+
   "style_tags": [],
+  "style_synonyms": [],
+
   "exclude_tags": [],
-  "weights": {
-    "fresh": 0,
-    "sweet": 0,
-    "woody": 0,
-    "aquatic": 0,
-    "citrus": 0,
-    "spicy": 0,
-    "powdery": 0,
-    "green": 0
-  }
+  "raw_terms": []
 }
 
 Правила:
-- Значення 0..5
-- notes_include = найважливіші ноти
-- notes_prefer = другорядні ноти
-- accords/style_tags = узагальнення під пошук
-- Якщо дані невідомі — став порожні масиви або 0
+- Якщо користувач пише українською або російською, додай і англійські відповідники.
+- Якщо користувач пише "кавун" або "арбуз" -> додай "watermelon".
+- Якщо користувач пише "вишня" / "черешня" / "вишнёвый" -> додай "cherry".
+- Якщо користувач пише "морський" / "морской" -> додай "marine", "aquatic", "ozonic".
+- Якщо користувач пише "шлейфовий" / "шлейфовый" -> додай "projection", "sillage", "long lasting".
+- Якщо користувач пише "свіжий" / "свежий" -> додай "fresh", "clean".
+- Якщо користувач пише "солодкий" / "сладкий" -> додай "sweet", "gourmand".
+- Профіль має бути корисним саме для пошуку в БД.
 `;
 
   const user = `Ось perfume analysis:\n${JSON.stringify(analysis, null, 2)}`;
@@ -39,28 +43,24 @@ async function buildSearchProfile(analysis) {
   const json = await chatJSON({
     system,
     user,
-    temperature: 0.1,
+    temperature: 0.2,
   });
 
   return (
     json || {
+      query_type: "unknown",
       gender: "unknown",
       season: [],
       notes_include: [],
+      notes_include_synonyms: [],
       notes_prefer: [],
+      notes_prefer_synonyms: [],
       accords: [],
+      accord_synonyms: [],
       style_tags: [],
+      style_synonyms: [],
       exclude_tags: [],
-      weights: {
-        fresh: 0,
-        sweet: 0,
-        woody: 0,
-        aquatic: 0,
-        citrus: 0,
-        spicy: 0,
-        powdery: 0,
-        green: 0,
-      },
+      raw_terms: [],
     }
   );
 }

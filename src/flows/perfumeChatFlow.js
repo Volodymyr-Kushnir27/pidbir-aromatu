@@ -9,7 +9,6 @@ const { rerankTopK } = require("../search/candidateRerank");
 const { sendPerfumeCard } = require("./sendPerfumeCard");
 
 const modeState = new Map();
-// tgId -> { mode: "pick" }
 
 function getTgId(ctx) {
   return ctx.from?.id;
@@ -59,20 +58,31 @@ async function onUserText(ctx) {
     analysis = await analyzePerfumeIntent(text);
   } catch (e) {
     console.error("analyzePerfumeIntent error:", e);
-    await ctx.reply("❌ Не вдалося проаналізувати аромат.");
+    await ctx.reply("❌ Не вдалося проаналізувати запит.");
     return true;
   }
 
-  if (!analysis?.found) {
+  const hasSearchData =
+    analysis?.query_type === "reference_perfume" ||
+    analysis?.query_type === "note_search" ||
+    analysis?.query_type === "style_search" ||
+    (analysis?.search_terms && analysis.search_terms.length) ||
+    (analysis?.notes_top && analysis.notes_top.length) ||
+    (analysis?.notes_heart && analysis.notes_heart.length) ||
+    (analysis?.notes_base && analysis.notes_base.length) ||
+    (analysis?.style && analysis.style.length) ||
+    (analysis?.accords && analysis.accords.length);
+
+  if (!hasSearchData) {
     await ctx.reply(
-      analysis?.short_ai_text ||
-        "Не зміг зрозуміти, який саме аромат Ви маєте на увазі. Напишіть точнішу назву.",
+      analysis?.user_friendly_reply ||
+        "Не до кінця зрозумів, що саме Ви шукаєте. Напишіть або назву аромату, або бажані ноти чи стиль.",
     );
     return true;
   }
 
-  if (analysis.short_ai_text) {
-    await ctx.reply(analysis.short_ai_text);
+  if (analysis.user_friendly_reply) {
+    await ctx.reply(analysis.user_friendly_reply);
   }
 
   let searchProfile;
@@ -95,7 +105,7 @@ async function onUserText(ctx) {
 
   if (!candidates.length) {
     await ctx.reply(
-      "❌ У базі не знайшов достатньо схожих варіантів. Спробуйте іншу назву або ширший запит.",
+      "У базі поки не знайшов вдалих збігів. Можете уточнити: для кого аромат, який стиль або які ноти цікаві?"
     );
     return true;
   }
