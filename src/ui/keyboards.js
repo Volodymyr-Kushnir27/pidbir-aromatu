@@ -1,59 +1,44 @@
-const { norm } = require("./text");
+const { Markup } = require("telegraf");
+const { ACTIONS } = require("../config");
 
-function contains(haystack, needle) {
-  return norm(haystack).includes(norm(needle));
+function adminMenuKeyboard() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("➕ Додати user", ACTIONS.ADD_USER),
+      Markup.button.callback("➖ Видалити user", ACTIONS.DEL_USER),
+    ],
+    [
+      Markup.button.callback("📋 Список users", ACTIONS.LIST_USERS),
+    ],
+    [
+      Markup.button.callback("➕ Додати admin", ACTIONS.ADD_ADMIN),
+      Markup.button.callback("➖ Видалити admin", ACTIONS.DEL_ADMIN),
+    ],
+    [
+      Markup.button.callback("📋 Список admins", ACTIONS.LIST_ADMINS),
+    ],
+    [
+      Markup.button.callback("🌿 Підбір аромату", ACTIONS.USER_PICK),
+    ],
+  ]);
 }
 
-function scoreCandidate(row, profile) {
-  let score = 0;
+function userMenuKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("🌿 Підбір аромату", ACTIONS.USER_PICK)],
+  ]);
+}
 
-  const haystack = [
-    row.name,
-    row.brand,
-    row.gender,
-    row.season,
-    row.category,
-    row.notes,
-    row.accords,
-    row.short_desc,
-    row.description,
-    row.keywords,
-  ]
-    .filter(Boolean)
-    .join(" | ")
-    .toLowerCase();
-
-  if (profile.gender && profile.gender !== "unknown") {
-    if (contains(haystack, profile.gender)) score += 12;
-  }
-
-  for (const season of profile.season || []) {
-    if (contains(haystack, season)) score += 5;
-  }
-
-  for (const note of profile.notes_include || []) {
-    if (contains(haystack, note)) score += 9;
-  }
-
-  for (const note of profile.notes_prefer || []) {
-    if (contains(haystack, note)) score += 4;
-  }
-
-  for (const accord of profile.accords || []) {
-    if (contains(haystack, accord)) score += 6;
-  }
-
-  for (const tag of profile.style_tags || []) {
-    if (contains(haystack, tag)) score += 3;
-  }
-
-  for (const ex of profile.exclude_tags || []) {
-    if (contains(haystack, ex)) score -= 7;
-  }
-
-  return score;
+function shareContactKeyboard() {
+  return Markup.keyboard([
+    [Markup.button.contactRequest("📱 Поділитися номером")],
+  ])
+    .resize()
+    .oneTime();
 }
 
 module.exports = {
-  scoreCandidate,
+  adminMenuKeyboard,
+  userMenuKeyboard,
+  shareContactKeyboard,
 };
