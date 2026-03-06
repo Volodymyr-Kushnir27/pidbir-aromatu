@@ -303,13 +303,23 @@ bot.on("callback_query", async (ctx) => {
     return showHome(ctx);
   }
 
-  if (data === ACTIONS.EXIT_PICK) {
-    try {
-      disableMode(ctx);
-    } catch {}
+ if (data === ACTIONS.EXIT_PICK) {
+  try {
+    disableMode(ctx);
+  } catch {}
 
-    return ctx.reply("✅ Режим вимкнено. Напишіть /start.");
+  const role = getRole(ctx);
+
+  if (role === "admin") {
+    return ctx.reply("✅ Режим підбору вимкнено.", adminMenuKeyboard());
   }
+
+  if (role === "user") {
+    return ctx.reply("✅ Режим підбору вимкнено.", userMenuKeyboard());
+  }
+
+  return ctx.reply("✅ Режим підбору вимкнено.");
+}
 
   if (String(data).startsWith("ADMIN_")) {
     if (role !== "admin") {

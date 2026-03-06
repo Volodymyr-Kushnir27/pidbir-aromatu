@@ -1,4 +1,3 @@
-const { Markup } = require("telegraf");
 const { SEARCH } = require("../config");
 const { PICK_MODE_HELP } = require("../ui/messages");
 
@@ -47,40 +46,7 @@ function disableMode(ctx) {
 
 async function onUserPickAction(ctx) {
   setMode(ctx, "pick");
-
-  return ctx.reply(
-    PICK_MODE_HELP,
-    Markup.inlineKeyboard([
-      [Markup.button.callback("⬅️ Назад", "BACK_HOME")],
-      [Markup.button.callback("❌ Вийти", "EXIT_PICK")],
-    ]),
-  );
-}
-
-async function sendExitButton(ctx) {
-  return ctx.reply(
-    "❌ Можете вийти з режиму підбору:",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("❌ Вийти", "EXIT_PICK")],
-    ]),
-  );
-}
-
-async function sendCodeVariants(ctx, items, num) {
-  const top = items.slice(0, 5);
-
-  const text =
-    `🔎 За номером **${num}** знайшов кілька варіантів:\n\n` +
-    top
-      .map((item, i) => {
-        const code = item.number_code || "—";
-        return `${i + 1}. **${code}** — ${item.name}`;
-      })
-      .join("\n") +
-    `\n\n✍️ Напишіть точний код з буквою, наприклад: **${top[0]?.number_code || `${num}A`}**`;
-
-  await ctx.reply(text, { parse_mode: "Markdown" });
-  return sendExitButton(ctx);
+  return ctx.reply(PICK_MODE_HELP);
 }
 
 function mergeGptReasons(items, gptSelected = []) {
@@ -212,7 +178,6 @@ async function onUserText(ctx) {
         season: true,
       });
 
-      await sendExitButton(ctx);
       return true;
     }
 
@@ -231,12 +196,19 @@ async function onUserText(ctx) {
           season: true,
         });
 
-        await sendExitButton(ctx);
         return true;
       }
 
       if (byNumeric.length > 1) {
-        await sendCodeVariants(ctx, byNumeric, num);
+        const top = byNumeric.slice(0, 5);
+        const listText =
+          `🔎 За номером **${num}** знайшов кілька варіантів:\n\n` +
+          top
+            .map((item, i) => `${i + 1}. **${item.number_code || "—"}** — ${item.name}`)
+            .join("\n") +
+          `\n\n✍️ Напишіть точний код з буквою, наприклад: **${top[0]?.number_code || `${num}A`}**`;
+
+        await ctx.reply(listText, { parse_mode: "Markdown" });
         return true;
       }
     }
@@ -246,7 +218,6 @@ async function onUserText(ctx) {
       { parse_mode: "Markdown" },
     );
 
-    await sendExitButton(ctx);
     return true;
   }
 
@@ -259,7 +230,6 @@ async function onUserText(ctx) {
   } catch (e) {
     console.error("analyzePerfumeIntent error:", e);
     await ctx.reply("❌ Не вдалося проаналізувати запит.");
-    await sendExitButton(ctx);
     return true;
   }
 
@@ -268,7 +238,6 @@ async function onUserText(ctx) {
       analysis?.user_friendly_reply ||
         "🤔 Не до кінця зрозумів запит.\n\nНапишіть:\n• назву аромату\n• код\n• ноти\n• стиль\n• або ситуацію використання",
     );
-    await sendExitButton(ctx);
     return true;
   }
 
@@ -307,7 +276,6 @@ async function onUserText(ctx) {
   } catch (e) {
     console.error("buildSearchProfile error:", e);
     await ctx.reply("❌ Не вдалося побудувати профіль пошуку.");
-    await sendExitButton(ctx);
     return true;
   }
 
@@ -320,7 +288,6 @@ async function onUserText(ctx) {
   } catch (e) {
     console.error("findCandidates error:", e);
     await ctx.reply("❌ Помилка пошуку в базі.");
-    await sendExitButton(ctx);
     return true;
   }
 
@@ -328,7 +295,6 @@ async function onUserText(ctx) {
     await ctx.reply(
       "😔 У базі поки не знайшов вдалих збігів.\n\nМожете уточнити:\n• для кого аромат\n• які ноти\n• який стиль\n• на яку ситуацію\n• який шлейф або стійкість",
     );
-    await sendExitButton(ctx);
     return true;
   }
 
@@ -380,7 +346,6 @@ async function onUserText(ctx) {
 
   if (!top.length) {
     await ctx.reply("❌ Схожих варіантів не знайшов.");
-    await sendExitButton(ctx);
     return true;
   }
 
@@ -395,7 +360,6 @@ async function onUserText(ctx) {
     });
   }
 
-  await sendExitButton(ctx);
   return true;
 }
 
