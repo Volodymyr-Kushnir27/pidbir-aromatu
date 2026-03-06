@@ -2,6 +2,7 @@ const { Markup } = require("telegraf");
 const { SEARCH } = require("../config");
 const { PICK_MODE_HELP } = require("../ui/messages");
 const { analyzePerfumeIntent } = require("../llm/perfumeAnalyzer");
+const { writeReferencePerfumeIntro } = require("../llm/writeReferencePerfumeIntro");
 const { buildSearchProfile } = require("../llm/perfumeSearchProfile");
 const { attachReasons } = require("../llm/resultExplainer");
 const { rerankAndExplain } = require("../llm/rerankExplainer");
@@ -140,6 +141,9 @@ async function onUserText(ctx) {
 
   await ctx.reply("🔎 Аналізую аромат...");
 
+  /* =========================
+     1. SEARCH BY CODE
+  ========================= */
   if (looksLikePerfumeCode(text)) {
     const code = normalizeCode(text);
     const byExactCode = findByNumberCode(code);
@@ -189,6 +193,9 @@ async function onUserText(ctx) {
     return true;
   }
 
+  /* =========================
+     2. ANALYZE
+  ========================= */
   let analysis;
   try {
     analysis = await analyzePerfumeIntent(text);
@@ -223,10 +230,34 @@ async function onUserText(ctx) {
     return true;
   }
 
-  if (analysis.user_friendly_reply) {
+  /* =========================
+     3. BEAUTIFUL INTRO FOR REFERENCE PERFUME
+  ========================= */
+  if (analysis.query_type === "reference_perfume") {
+    try {
+      const introText = await writeReferencePerfumeIntro({
+        userText: text,
+        analysis,
+      });
+
+      if (introText) {
+        await ctx.reply(introText);
+      } else if (analysis.user_friendly_reply) {
+        await ctx.reply(`✨ ${analysis.user_friendly_reply}`);
+      }
+    } catch (e) {
+      console.error("writeReferencePerfumeIntro error:", e);
+      if (analysis.user_friendly_reply) {
+        await ctx.reply(`✨ ${analysis.user_friendly_reply}`);
+      }
+    }
+  } else if (analysis.user_friendly_reply) {
     await ctx.reply(`✨ ${analysis.user_friendly_reply}`);
   }
 
+  /* =========================
+     4. BUILD SEARCH PROFILE
+  ========================= */
   let searchProfile;
   try {
     searchProfile = await buildSearchProfile(analysis);
@@ -236,6 +267,9 @@ async function onUserText(ctx) {
     return true;
   }
 
+  /* =========================
+     5. DB SEARCH
+  ========================= */
   let candidates = [];
   try {
     candidates = findCandidates(searchProfile, SEARCH.LIMIT_CANDIDATES || 80);
@@ -252,6 +286,9 @@ async function onUserText(ctx) {
     return true;
   }
 
+  /* =========================
+     6. LOCAL FALLBACK TOP-K
+  ========================= */
   let top = rerankTopK(
     candidates,
     searchProfile,
@@ -259,6 +296,9 @@ async function onUserText(ctx) {
     SEARCH.TOP_K || 3,
   );
 
+  /* =========================
+     7. GPT RERANK + EXPLAIN
+  ========================= */
   try {
     const gptSelected = await rerankAndExplain({
       userText: text,
@@ -287,6 +327,9 @@ async function onUserText(ctx) {
     console.error("rerankAndExplain error:", e);
   }
 
+  /* =========================
+     8. LOCAL FALLBACK REASONS
+  ========================= */
   top = attachReasons(top, searchProfile);
 
   if (!top.length) {
