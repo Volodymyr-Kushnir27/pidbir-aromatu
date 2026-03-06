@@ -10,6 +10,7 @@ const { rerankAndExplain } = require("../llm/rerankExplainer");
 const { findCandidates } = require("../search/candidateSearch");
 const { rerankTopK } = require("../search/candidateRerank");
 const {
+  findByExactName,
   findByNumberCode,
   findAllByNumericCode,
   looksLikePerfumeCode,
@@ -140,10 +141,7 @@ function buildPayloadWithExplanations(item) {
     ? `\n\n💡 Чому обрано:\n• ${why.join("\n• ")}`
     : `\n\n💡 Чому обрано:\n• близький за загальним характером`;
 
-  const commentBlock = assistantComment
-    ? `\n\n🗣 ${assistantComment}`
-    : "";
-
+  const commentBlock = assistantComment ? `\n\n🗣 ${assistantComment}` : "";
   const metaBlock = renderMetaComment(item);
 
   return {
@@ -158,6 +156,24 @@ async function onUserText(ctx) {
 
   const text = String(ctx.message?.text || "").trim();
   if (!text) return true;
+
+  /* =========================
+     0. EXACT NAME MATCH
+  ========================= */
+  const exactByName = findByExactName(text);
+
+  if (exactByName) {
+    await ctx.reply(`✅ Знайшов точний збіг за назвою **${exactByName.name}**:`, {
+      parse_mode: "Markdown",
+    });
+
+    await sendPerfumeCard(ctx, exactByName, {
+      notes: true,
+      season: true,
+    });
+
+    return true;
+  }
 
   await ctx.reply("🔎 Аналізую аромат...");
 

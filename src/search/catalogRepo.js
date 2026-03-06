@@ -17,6 +17,14 @@ function normalizeCode(input) {
     .replace(/Х/g, "X");
 }
 
+function normalizeName(input) {
+  return String(input || "")
+    .toLowerCase()
+    .replace(/["'`"]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function extractNumericCode(input) {
   const code = normalizeCode(input);
   const m = code.match(/^(\d{1,4})/);
@@ -139,6 +147,42 @@ function findByNameLike(text, limit = 20) {
   return rows.map(mapRow);
 }
 
+function findByExactName(text) {
+  const target = normalizeName(text);
+  if (!target) return null;
+
+  const rows = db
+    .prepare(`
+      SELECT
+        id,
+        photo,
+        name,
+        number_code,
+        number_codes,
+        type,
+        for_whom,
+        season,
+        occasion,
+        age,
+        notes,
+        keywords,
+        version,
+        description,
+        quote
+      FROM perfumes
+    `)
+    .all()
+    .map(mapRow);
+
+  for (const row of rows) {
+    if (normalizeName(row.name) === target) {
+      return row;
+    }
+  }
+
+  return null;
+}
+
 function looksLikePerfumeCode(text) {
   const raw = normalizeCode(text);
   if (!raw) return false;
@@ -226,9 +270,11 @@ module.exports = {
   getAllPerfumes,
   getPerfumeById,
   findByNameLike,
+  findByExactName,
   findByNumberCode,
   findAllByNumericCode,
   looksLikePerfumeCode,
   normalizeCode,
   extractNumericCode,
+  normalizeName,
 };
