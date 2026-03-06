@@ -9,6 +9,8 @@ const { rerankAndExplain } = require("../llm/rerankExplainer");
 
 const { findCandidates } = require("../search/candidateSearch");
 const { rerankTopK } = require("../search/candidateRerank");
+const catalogRepo = require("../search/catalogRepo");
+
 const {
   findByExactName,
   findByNumberCode,
@@ -16,7 +18,7 @@ const {
   looksLikePerfumeCode,
   normalizeCode,
   extractNumericCode,
-} = require("../search/catalogRepo");
+} = catalogRepo;
 
 const { sendPerfumeCard } = require("./sendPerfumeCard");
 
@@ -48,6 +50,191 @@ function disableMode(ctx) {
 async function onUserPickAction(ctx) {
   setMode(ctx, "pick");
   return ctx.reply(PICK_MODE_HELP);
+}
+
+/* =========================
+   Helpers
+========================= */
+function normText(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/["'`“”‘’]/g, "")
+    .replace(/[()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeName(s) {
+  return normText(s)
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((x) => x.trim())
+    .filter((x) => x.length >= 2);
+}
+
+function uniqById(arr) {
+  const seen = new Set();
+  const out = [];
+
+  for (const item of arr || []) {
+    const id = Number(item?.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(item);
+  }
+
+  return out;
+}
+
+function scoreNameMatch(query, item) {
+  const q = normText(query);
+  const name = normText(item?.name || "");
+  const code = normText(item?.number_code || "");
+  const qTokens = tokenizeName(q);
+  const nTokens = tokenizeName(name);
+
+  let score = 0;
+
+  if (!q || !name) return score;
+
+  if (name === q) score += 1000;
+  if (code && code === q) score += 900;
+
+  if (name.includes(q)) score += 300;
+  if (q.includes(name) && name.length >= 4) score += 120;
+
+  for (const token of qTokens) {
+    if (name.includes(token)) score += 45;
+    if (code.includes(token)) score += 35;
+  }
+
+  for (const token of qTokens) {
+    if (nTokens.includes(token)) score += 20;
+  }
+
+  // бонус якщо всі токени запиту є в назві
+  if (qTokens.length && qTokens.every((t) => name.includes(t))) {
+    score += 180;
+  }
+
+  // штраф за дуже далекі по довжині назви
+  score -= Math.abs(name.length - q.length) * 0.5;
+
+  return score;
+}
+
+function isLikelyConcretePerfumeQuery(text, analysis) {
+  const raw = String(text || "").trim();
+
+  if (!raw) return false;
+  if (looksLikePerfumeCode(raw)) return true;
+
+  if (analysis?.query_type === "reference_perfume") return true;
+
+  const tokens = tokenizeName(raw);
+
+  if (tokens.length >= 2 && tokens.length <= 6) {
+    const hasDigits = /\d/.test(raw);
+    const hasQuotes = /["'“”]/.test(raw);
+    const hasLatin = /[a-z]/i.test(raw);
+
+    if (hasDigits || hasQuotes || hasLatin) return true;
+  }
+
+  return false;
+}
+
+function getLooseNameCandidates(query, limit = 10) {
+  const results = [];
+
+  if (typeof catalogRepo.findPerfumesByNameLike === "function") {
+    try {
+      const direct = catalogRepo.findPerfumesByNameLike(query, { limit });
+      if (Array.isArray(direct) && direct.length) {
+        results.push(...direct);
+      }
+    } catch (e) {
+      console.error("findPerfumesByNameLike error:", e);
+    }
+  }
+
+  // fallback: спроба через target_name variants, якщо є код або коротка назва
+  if (!results.length && typeof catalogRepo.getPerfumeById === "function") {
+    // без додаткового джерела тут нічого не робимо
+  }
+
+  return uniqById(results)
+    .map((item) => ({ ...item, __nameScore: scoreNameMatch(query, item) }))
+    .filter((item) => item.__nameScore > 80)
+    .sort((a, b) => b.__nameScore - a.__nameScore)
+    .slice(0, limit);
+}
+
+async function tryReplySinglePerfume(ctx, item, prefixText = "") {
+  if (prefixText) {
+    await ctx.reply(prefixText, { parse_mode: "Markdown" });
+  }
+
+  await sendPerfumeCard(ctx, item, {
+    notes: true,
+    season: true,
+  });
+
+  return true;
+}
+
+async function tryFindByNameAndReply(ctx, query, opts = {}) {
+  const {
+    exactPrefix = "",
+    singleLoosePrefix = "",
+    multipleLoosePrefix = "",
+    allowMultipleList = true,
+  } = opts;
+
+  const cleaned = String(query || "").trim();
+  if (!cleaned) return false;
+
+  if (typeof findByExactName === "function") {
+    try {
+      const exact = findByExactName(cleaned);
+      if (exact) {
+        await tryReplySinglePerfume(
+          ctx,
+          exact,
+          exactPrefix || `✅ Знайшов аромат **${exact.name}**:`,
+        );
+        return true;
+      }
+    } catch (e) {
+      console.error("findByExactName error:", e);
+    }
+  }
+
+  const loose = getLooseNameCandidates(cleaned, 7);
+
+  if (loose.length === 1) {
+    await tryReplySinglePerfume(
+      ctx,
+      loose[0],
+      singleLoosePrefix || `✅ Знайшов аромат за назвою **${loose[0].name}**:`,
+    );
+    return true;
+  }
+
+  if (loose.length > 1 && allowMultipleList) {
+    const listText =
+      (multipleLoosePrefix || `🔎 За назвою **${cleaned}** знайшов кілька близьких варіантів:`) +
+      "\n\n" +
+      loose
+        .slice(0, 5)
+        .map((item, i) => `${i + 1}. **${item.name}**${item.number_code ? ` — ${item.number_code}` : ""}`)
+        .join("\n") +
+      "\n\n✍️ Напишіть точнішу назву або код.";
+
+    await ctx.reply(listText, { parse_mode: "Markdown" });
+    return true;
+  }
+
+  return false;
 }
 
 function mergeGptReasons(items, gptSelected = []) {
@@ -158,21 +345,19 @@ async function onUserText(ctx) {
   if (!text) return true;
 
   /* =========================
-     0. EXACT NAME MATCH
+     0. DIRECT NAME LOOKUP
   ========================= */
-  const exactByName = findByExactName(text);
-
-  if (exactByName) {
-    await ctx.reply(`✅ Знайшов точний збіг за назвою **${exactByName.name}**:`, {
-      parse_mode: "Markdown",
+  {
+    const handledByName = await tryFindByNameAndReply(ctx, text, {
+      exactPrefix: "",
+      singleLoosePrefix: "",
+      multipleLoosePrefix: "",
+      allowMultipleList: true,
     });
 
-    await sendPerfumeCard(ctx, exactByName, {
-      notes: true,
-      season: true,
-    });
-
-    return true;
+    if (handledByName) {
+      return true;
+    }
   }
 
   await ctx.reply("🔎 Аналізую аромат...");
@@ -180,7 +365,7 @@ async function onUserText(ctx) {
   /* =========================
      1. SEARCH BY CODE
   ========================= */
-  if (looksLikePerfumeCode(text)) {
+  if (typeof looksLikePerfumeCode === "function" && looksLikePerfumeCode(text)) {
     const code = normalizeCode(text);
     const byExactCode = findByNumberCode(code);
 
@@ -258,7 +443,29 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     3. BEAUTIFUL INTRO FOR REFERENCE PERFUME
+     3. IF REFERENCE PERFUME -> FIND THE PERFUME ITSELF FIRST
+  ========================= */
+  if (analysis?.query_type === "reference_perfume") {
+    const refName = String(
+      analysis?.target_name ||
+      analysis?.reference_name ||
+      text
+    ).trim();
+
+    const handledReference = await tryFindByNameAndReply(ctx, refName, {
+      exactPrefix: `✅ Знайшов аромат **${refName}**:`,
+      singleLoosePrefix: `✅ Знайшов аромат за назвою **${refName}**:`,
+      multipleLoosePrefix: `🔎 За назвою **${refName}** знайшов кілька близьких варіантів:`,
+      allowMultipleList: true,
+    });
+
+    if (handledReference) {
+      return true;
+    }
+  }
+
+  /* =========================
+     4. BEAUTIFUL INTRO / SEARCH EXPLANATION
   ========================= */
   if (analysis.query_type === "reference_perfume") {
     try {
@@ -284,7 +491,7 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     4. BUILD SEARCH PROFILE
+     5. BUILD SEARCH PROFILE
   ========================= */
   let searchProfile;
   try {
@@ -296,7 +503,7 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     5. DB SEARCH
+     6. DB SEARCH
   ========================= */
   let candidates = [];
   try {
@@ -315,7 +522,35 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     6. LOCAL FALLBACK TOP-K
+     7. IF QUERY LOOKS LIKE A CONCRETE PERFUME -> CHECK CANDIDATES FOR EXACT/BEST NAME
+  ========================= */
+  if (isLikelyConcretePerfumeQuery(text, analysis)) {
+    const concreteQuery = String(
+      analysis?.target_name ||
+      analysis?.reference_name ||
+      text
+    ).trim();
+
+    const topNameHit = [...candidates]
+      .map((item) => ({ item, score: scoreNameMatch(concreteQuery, item) }))
+      .sort((a, b) => b.score - a.score)[0];
+
+    if (topNameHit && topNameHit.score >= 180) {
+      await ctx.reply(`✅ Знайшов найближчий збіг за назвою **${topNameHit.item.name}**:`, {
+        parse_mode: "Markdown",
+      });
+
+      await sendPerfumeCard(ctx, topNameHit.item, {
+        notes: true,
+        season: true,
+      });
+
+      return true;
+    }
+  }
+
+  /* =========================
+     8. LOCAL FALLBACK TOP-K
   ========================= */
   let top = rerankTopK(
     candidates,
@@ -325,7 +560,7 @@ async function onUserText(ctx) {
   );
 
   /* =========================
-     7. GPT RERANK + EXPLAIN
+     9. GPT RERANK + EXPLAIN
   ========================= */
   try {
     const gptSelected = await rerankAndExplain({
@@ -356,7 +591,7 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     8. LOCAL FALLBACK REASONS
+     10. LOCAL FALLBACK REASONS
   ========================= */
   top = attachReasons(top, searchProfile);
 
@@ -365,7 +600,13 @@ async function onUserText(ctx) {
     return true;
   }
 
-  await ctx.reply(`✨ Підібрав ${top.length} найбільш схожі варіанти:`);
+  if (analysis?.query_type === "reference_perfume" || isLikelyConcretePerfumeQuery(text, analysis)) {
+    await ctx.reply(
+      `❌ Точного збігу не знайшов, але підібрав ${top.length} найбільш схожі варіанти:`,
+    );
+  } else {
+    await ctx.reply(`✨ Підібрав ${top.length} найбільш схожі варіанти:`);
+  }
 
   for (const item of top) {
     const payload = buildPayloadWithExplanations(item);
