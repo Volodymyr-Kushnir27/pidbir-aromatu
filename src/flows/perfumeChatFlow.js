@@ -6,6 +6,11 @@ const { buildSearchProfile } = require("../llm/perfumeSearchProfile");
 const { attachReasons } = require("../llm/resultExplainer");
 const { findCandidates } = require("../search/candidateSearch");
 const { rerankTopK } = require("../search/candidateRerank");
+const {
+  findByNumberCode,
+  looksLikePerfumeCode,
+  normalizeCode,
+} = require("../search/catalogRepo");
 const { sendPerfumeCard } = require("./sendPerfumeCard");
 
 const modeState = new Map();
@@ -53,6 +58,31 @@ async function onUserText(ctx) {
 
   await ctx.reply("🔎 Аналізую аромат...");
 
+  /* =========================
+     1. DIRECT SEARCH BY CODE
+  ========================= */
+  if (looksLikePerfumeCode(text)) {
+    const code = normalizeCode(text);
+    const byCode = findByNumberCode(code);
+
+    if (byCode) {
+      await ctx.reply(`Знайшов аромат за кодом ${code}:`);
+      await sendPerfumeCard(ctx, byCode, {
+        notes: true,
+        season: true,
+      });
+      return true;
+    }
+
+    await ctx.reply(
+      `Не знайшов аромат з кодом ${code}. Спробуйте інший код, назву аромату або опишіть ноти / стиль.`,
+    );
+    return true;
+  }
+
+  /* =========================
+     2. GPT ANALYSIS
+  ========================= */
   let analysis;
   try {
     analysis = await analyzePerfumeIntent(text);
@@ -76,7 +106,7 @@ async function onUserText(ctx) {
   if (!hasSearchData) {
     await ctx.reply(
       analysis?.user_friendly_reply ||
-        "Не до кінця зрозумів, що саме Ви шукаєте. Напишіть або назву аромату, або бажані ноти чи стиль.",
+        "Не до кінця зрозумів, що саме Ви шукаєте. Напишіть назву аромату, його код, бажані ноти або стиль.",
     );
     return true;
   }
@@ -105,7 +135,7 @@ async function onUserText(ctx) {
 
   if (!candidates.length) {
     await ctx.reply(
-      "У базі поки не знайшов вдалих збігів. Можете уточнити: для кого аромат, який стиль або які ноти цікаві?"
+      "У базі поки не знайшов вдалих збігів. Можете уточнити: код, для кого аромат, який стиль або які ноти цікаві?",
     );
     return true;
   }

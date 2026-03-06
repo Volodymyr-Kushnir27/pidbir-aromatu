@@ -1,34 +1,59 @@
 const { truncate } = require("../utils/text");
 
 function genderToUa(gender) {
-  const map = {
-    male: "Чоловічий",
-    female: "Жіночий",
-    unisex: "Унісекс",
-    unknown: "Невідомо",
-  };
-  return map[String(gender || "").toLowerCase()] || gender || "Невідомо";
+  const g = String(gender || "").toLowerCase();
+
+  if (
+    g.includes("male") ||
+    g.includes("man") ||
+    g.includes("men") ||
+    g.includes("чолов") ||
+    g.includes("муж")
+  ) {
+    return "Чоловічий";
+  }
+
+  if (
+    g.includes("female") ||
+    g.includes("woman") ||
+    g.includes("women") ||
+    g.includes("жіноч") ||
+    g.includes("жен")
+  ) {
+    return "Жіночий";
+  }
+
+  if (g.includes("unisex") || g.includes("унісекс") || g.includes("унисекс")) {
+    return "Унісекс";
+  }
+
+  return gender || "Невідомо";
 }
 
 function buildPerfumeCaption(item, options = {}) {
   const name = item.name || "Без назви";
-  const brand = item.brand ? `Бренд: ${item.brand}\n` : "";
+
+  const code = item.number_code ? `Код: ${item.number_code}\n` : "";
   const type = item.category ? `Тип: ${item.category}\n` : "";
   const gender = `Для кого: ${genderToUa(item.gender)}\n`;
+
   const season =
     options.season && item.season ? `Сезон: ${item.season}\n` : "";
+
   const notes =
-    options.notes && item.notes ? `Ноти: ${truncate(item.notes, 240)}\n` : "";
+    options.notes && item.notes ? `Ноти: ${truncate(item.notes, 260)}\n` : "";
+
   const accords = item.accords
-    ? `Напрям: ${truncate(item.accords, 160)}\n`
+    ? `Напрям: ${truncate(item.accords, 180)}\n`
     : "";
+
   const desc = item.short_desc
-    ? `\n${truncate(item.short_desc, 500)}`
+    ? `\n${truncate(item.short_desc, 650)}`
     : item.description
-      ? `\n${truncate(item.description, 500)}`
+      ? `\n${truncate(item.description, 650)}`
       : "";
 
-  return `**${name}**\n\n${brand}${type}${gender}${season}${notes}${accords}${desc}`.trim();
+  return `**${name}**\n\n${code}${type}${gender}${season}${notes}${accords}${desc}`.trim();
 }
 
 module.exports = { buildPerfumeCaption };

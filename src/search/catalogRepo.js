@@ -1,161 +1,222 @@
 const db = require("../db/catalogDb");
-const { SEARCH } = require("../config");
 
-let cachedTable = null;
-let cachedColumns = null;
-
-function getTables() {
-  return db
-    .prepare(
-      `
-      SELECT name
-      FROM sqlite_master
-      WHERE type='table'
-      ORDER BY name
-      `,
-    )
-    .all()
-    .map((r) => r.name);
+function normalizeCode(input) {
+  return String(input || "")
+    .toUpperCase()
+    .replace(/\s+/g, "")
+    .replace(/А/g, "A")
+    .replace(/В/g, "B")
+    .replace(/С/g, "C")
+    .replace(/Е/g, "E")
+    .replace(/К/g, "K")
+    .replace(/М/g, "M")
+    .replace(/Н/g, "H")
+    .replace(/О/g, "O")
+    .replace(/Р/g, "P")
+    .replace(/Т/g, "T")
+    .replace(/Х/g, "X");
 }
 
-function detectPerfumeTable() {
-  if (cachedTable) return cachedTable;
-
-  const tables = getTables();
-  const preferred = [
-    "perfumes",
-    "catalog",
-    "perfumes_filtered",
-    "products",
-  ];
-
-  for (const name of preferred) {
-    if (tables.includes(name)) {
-      cachedTable = name;
-      return cachedTable;
-    }
-  }
-
-  cachedTable = tables[0] || null;
-  return cachedTable;
-}
-
-function getColumns(tableName) {
-  if (cachedColumns && cachedColumns.tableName === tableName) {
-    return cachedColumns.cols;
-  }
-
-  const cols = db
-    .prepare(`PRAGMA table_info(${tableName})`)
-    .all()
-    .map((r) => r.name);
-
-  cachedColumns = { tableName, cols };
-  return cols;
-}
-
-function pickColumn(cols, variants, fallback = null) {
-  for (const v of variants) {
-    if (cols.includes(v)) return v;
-  }
-  return fallback;
-}
-
-function getColumnMap() {
-  const table = detectPerfumeTable();
-  if (!table) throw new Error("No tables found in SQLite database");
-
-  const cols = getColumns(table);
+function mapRow(row) {
+  if (!row) return null;
 
   return {
-    table,
-    id: pickColumn(cols, ["id", "perfume_id", "product_id"], cols[0]),
-    name: pickColumn(cols, ["name", "title", "perfume_name"], null),
-    brand: pickColumn(cols, ["brand", "manufacturer"], null),
-    gender: pickColumn(cols, ["gender", "for_gender", "sex"], null),
-    season: pickColumn(cols, ["season", "seasons"], null),
-    category: pickColumn(cols, ["category", "categories", "type"], null),
-    notes: pickColumn(cols, ["notes", "note", "main_notes"], null),
-    accords: pickColumn(cols, ["accords", "keywords", "tags"], null),
-    short_desc: pickColumn(cols, ["short_desc", "short_description", "summary"], null),
-    description: pickColumn(cols, ["description", "desc", "full_description"], null),
-    image_url: pickColumn(cols, ["image_url", "photo", "image", "img"], null),
-    version: pickColumn(cols, ["version"], null),
-    keywords: pickColumn(cols, ["keywords", "tags"], null),
+    id: row.id,
+    image_url: row.photo || "",
+    photo: row.photo || "",
+    name: row.name || "",
+    brand: "",
+
+    number_code: row.number_code || "",
+    number_codes: row.number_codes || "",
+
+    category: row.type || "",
+    gender: row.for_whom || "",
+    season: row.season || "",
+    occasion: row.occasion || "",
+    age: row.age || "",
+
+    notes: row.notes || "",
+    accords: row.keywords || "",
+    keywords: row.keywords || "",
+
+    version: row.version || "",
+    description: row.description || "",
+    short_desc: row.description || "",
+
+    quote: row.quote || "",
   };
 }
 
-function buildSelectSql(map, limit = SEARCH.MAX_ROWS_SCAN || 600) {
-  const fields = [];
+function getAllPerfumes(limit = 1000) {
+  const rows = db
+    .prepare(`
+      SELECT
+        id,
+        photo,
+        name,
+        number_code,
+        number_codes,
+        type,
+        for_whom,
+        season,
+        occasion,
+        age,
+        notes,
+        keywords,
+        version,
+        description,
+        quote
+      FROM perfumes
+      LIMIT ?
+    `)
+    .all(Number(limit));
 
-  for (const [key, col] of Object.entries(map)) {
-    if (key === "table") continue;
-    if (col) {
-      fields.push(`${col} AS ${key}`);
-    } else {
-      fields.push(`NULL AS ${key}`);
-    }
-  }
-
-  return `
-    SELECT ${fields.join(", ")}
-    FROM ${map.table}
-    LIMIT ${Number(limit)}
-  `;
-}
-
-function getAllPerfumes(limit = SEARCH.MAX_ROWS_SCAN || 600) {
-  const map = getColumnMap();
-  const sql = buildSelectSql(map, limit);
-  return db.prepare(sql).all();
+  return rows.map(mapRow);
 }
 
 function getPerfumeById(id) {
-  const map = getColumnMap();
+  const row = db
+    .prepare(`
+      SELECT
+        id,
+        photo,
+        name,
+        number_code,
+        number_codes,
+        type,
+        for_whom,
+        season,
+        occasion,
+        age,
+        notes,
+        keywords,
+        version,
+        description,
+        quote
+      FROM perfumes
+      WHERE id = ?
+      LIMIT 1
+    `)
+    .get(id);
 
-  if (!map.id) return null;
-
-  const fields = [];
-  for (const [key, col] of Object.entries(map)) {
-    if (key === "table") continue;
-    if (col) fields.push(`${col} AS ${key}`);
-    else fields.push(`NULL AS ${key}`);
-  }
-
-  const sql = `
-    SELECT ${fields.join(", ")}
-    FROM ${map.table}
-    WHERE ${map.id} = ?
-    LIMIT 1
-  `;
-
-  return db.prepare(sql).get(id) || null;
+  return mapRow(row);
 }
 
 function findByNameLike(text, limit = 20) {
-  const map = getColumnMap();
-  if (!map.name) return [];
+  const q = `%${String(text || "").trim()}%`;
 
-  const fields = [];
-  for (const [key, col] of Object.entries(map)) {
-    if (key === "table") continue;
-    if (col) fields.push(`${col} AS ${key}`);
-    else fields.push(`NULL AS ${key}`);
+  const rows = db
+    .prepare(`
+      SELECT
+        id,
+        photo,
+        name,
+        number_code,
+        number_codes,
+        type,
+        for_whom,
+        season,
+        occasion,
+        age,
+        notes,
+        keywords,
+        version,
+        description,
+        quote
+      FROM perfumes
+      WHERE LOWER(name) LIKE LOWER(?)
+      LIMIT ?
+    `)
+    .all(q, Number(limit));
+
+  return rows.map(mapRow);
+}
+
+function looksLikePerfumeCode(text) {
+  const raw = normalizeCode(text);
+
+  if (!raw) return false;
+
+  return /^[0-9]{1,4}[A-ZА-ЯІЇЄҐ]?$/.test(raw);
+}
+
+function splitCodes(value) {
+  return String(value || "")
+    .split(/[,\s;/|]+/)
+    .map((x) => normalizeCode(x))
+    .filter(Boolean);
+}
+
+function findByNumberCode(input) {
+  const code = normalizeCode(input);
+  if (!code) return null;
+
+  const exact = db
+    .prepare(`
+      SELECT
+        id,
+        photo,
+        name,
+        number_code,
+        number_codes,
+        type,
+        for_whom,
+        season,
+        occasion,
+        age,
+        notes,
+        keywords,
+        version,
+        description,
+        quote
+      FROM perfumes
+      WHERE UPPER(REPLACE(number_code, 'А', 'A')) = ?
+      LIMIT 1
+    `)
+    .get(code);
+
+  if (exact) return mapRow(exact);
+
+  const rows = db
+    .prepare(`
+      SELECT
+        id,
+        photo,
+        name,
+        number_code,
+        number_codes,
+        type,
+        for_whom,
+        season,
+        occasion,
+        age,
+        notes,
+        keywords,
+        version,
+        description,
+        quote
+      FROM perfumes
+      WHERE number_codes IS NOT NULL
+        AND TRIM(number_codes) <> ''
+    `)
+    .all();
+
+  for (const row of rows) {
+    const codes = splitCodes(row.number_codes);
+    if (codes.includes(code)) {
+      return mapRow(row);
+    }
   }
 
-  const sql = `
-    SELECT ${fields.join(", ")}
-    FROM ${map.table}
-    WHERE LOWER(${map.name}) LIKE LOWER(?)
-    LIMIT ?
-  `;
-
-  return db.prepare(sql).all(`%${String(text || "").trim()}%`, Number(limit));
+  return null;
 }
 
 module.exports = {
   getAllPerfumes,
   getPerfumeById,
   findByNameLike,
-  getColumnMap,
+  findByNumberCode,
+  looksLikePerfumeCode,
+  normalizeCode,
 };
