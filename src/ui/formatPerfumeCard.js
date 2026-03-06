@@ -1,44 +1,20 @@
-// src/ui/formatPerfumeCard.js
-function norm(s) {
-  return String(s || "").trim();
-}
+const { truncate } = require("../utils/text");
 
-function buildPerfumeCaption(perfume, toggles = { notes: false, season: false, reasonText: "" }) {
-  const p = perfume || {};
+function buildPerfumeCaption(item, options = {}) {
+  const name = item.name || "Без назви";
+  const brand = item.brand ? `Бренд: ${item.brand}\n` : "";
+  const type = item.category ? `Тип: ${item.category}\n` : "";
+  const gender = item.gender ? `Для кого: ${item.gender}\n` : "";
+  const season = options.season && item.season ? `Сезон: ${item.season}\n` : "";
+  const notes = options.notes && item.notes ? `Ноти: ${truncate(item.notes, 240)}\n` : "";
+  const accords = item.accords ? `Напрям: ${truncate(item.accords, 160)}\n` : "";
+  const desc = item.short_desc
+    ? `\n${truncate(item.short_desc, 500)}`
+    : item.description
+      ? `\n${truncate(item.description, 500)}`
+      : "";
 
-  const name = norm(p.name);
-  const forWhom = norm(p.for_whom);
-  const type = norm(p.type);
-  const season = norm(p.season);
-  const desc = norm(p.description);
-  const notes = norm(p.notes);
-
-  const lines = [];
-
-  if (name) lines.push(name);
-
-  if (forWhom) {
-    const fw = forWhom.toLowerCase();
-    const icon = fw.includes("жін") ? "👩" : fw.includes("чолов") ? "👨" : "🧑";
-    lines.push(`${icon} ${forWhom}`);
-  }
-
-  if (type) lines.push(`Тип: ${type}`);
-
-  // БАЗОВО сезон не показуємо, тільки по toggle
-  if (toggles?.season) {
-    lines.push(`🌤 Сезон: ${season || "— (немає в базі)"}`);
-  }
-
-  if (desc) lines.push(`Опис: ${desc}`);
-
-  // Ноти — тільки по toggle
-  if (toggles?.notes) {
-    lines.push("");
-    lines.push(`✨ Ноти: ${notes || "— (немає в базі)"}`);
-  }
-
-  return lines.filter(Boolean).join("\n");
+  return `**${name}**\n\n${brand}${type}${gender}${season}${notes}${accords}${desc}`.trim();
 }
 
 module.exports = { buildPerfumeCaption };

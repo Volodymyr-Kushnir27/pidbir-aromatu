@@ -1,13 +1,8 @@
-function fmtList(items, title) {
-  if (!items.length) return `${title}\n(порожньо)`;
-
-  const lines = items.map((x, i) => {
-    const phone = x.phone ? x.phone : "—";
-    const tg = x.tg_id ? x.tg_id : "—";
-    return `${i + 1}) ${x.fio} | phone: ${phone} | tg_id: ${tg}`;
-  });
-
-  return `${title}\n\n` + lines.join("\n");
-}
-
-module.exports = { fmtList };
+module.exports = {
+  PICK_MODE_HELP:
+    "Напишіть назву аромату або фразу у стилі:\n\n" +
+    "• Хочу схожий парфум на Excite by Dima Bilan\n" +
+    "• Щось схоже на Light Blue\n" +
+    "• Підбери аромат як Kenzo Homme\n\n" +
+    "Я спочатку зроблю AI-розбір аромату, а потім підберу 3 найкращі варіанти з бази.",
+};

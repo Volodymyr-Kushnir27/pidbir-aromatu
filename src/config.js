@@ -1,4 +1,3 @@
-
 function must(name) {
   const v = process.env[name];
   if (!v) throw new Error(`${name} missing`);
@@ -10,15 +9,13 @@ if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY missing");
 
 module.exports = {
   BOT_TOKEN: must("BOT_TOKEN"),
-
   OPENAI_API_KEY,
+
   CHAT_MODEL: process.env.CHAT_MODEL || "gpt-4o-mini",
 
   DB_PATH: process.env.DB_PATH || "./data/perfumes_filtered.sqlite",
   ADMINS_PATH: process.env.ADMINS_PATH || "./data/admins.json",
   USERS_PATH: process.env.USERS_PATH || "./data/users.json",
-  EMBED_MODEL: process.env.EMBED_MODEL || "text-embedding-3-small",
-    
 
   ACTIONS: {
     ADD_USER: "ADMIN_ADD_USER",
@@ -30,7 +27,6 @@ module.exports = {
     LIST_ADMINS: "ADMIN_LIST_ADMINS",
 
     USER_PICK: "USER_PICK",
-    USER_NOTES: "USER_NOTES",
     BACK_HOME: "BACK_HOME",
     EXIT_PICK: "EXIT_PICK",
   },
@@ -43,6 +39,8 @@ module.exports = {
   },
 
   SEARCH: {
-    LIMIT: 5,
+    LIMIT_CANDIDATES: 120,
+    TOP_K: 3,
+    MAX_ROWS_SCAN: 600,
   },
 };

@@ -1,23 +1,24 @@
-// src/flows/sendPerfumeCard.js
 const { buildPerfumeCaption } = require("../ui/formatPerfumeCard");
-const { perfumeCardKeyboard } = require("../ui/keyboards");
 
-async function sendPerfumeCard(ctx, perfume, toggles = { notes: false, season: false, reasonText: "" }) {
-  const reason = String(toggles?.reasonText || "").trim();
-  const baseCaption = buildPerfumeCaption(perfume, toggles);
-  const caption = reason ? `🧠 ${reason}\n\n${baseCaption}` : baseCaption;
+async function sendPerfumeCard(ctx, item, options = {}) {
+  const caption = buildPerfumeCaption(item, options);
+  const photo = item.image_url || null;
 
-  // ✅ передаємо toggles у клавіатуру, щоб кнопки змінювалися (і markup теж)
-  const keyboard = perfumeCardKeyboard(perfume.id, {
-    notes: !!toggles?.notes,
-    season: !!toggles?.season,
-  });
-
-  if (!perfume.photo) {
-    return ctx.reply(caption, keyboard);
+  if (photo) {
+    try {
+      return await ctx.replyWithPhoto(
+        { url: photo },
+        {
+          caption,
+          parse_mode: "Markdown",
+        },
+      );
+    } catch (e) {
+      console.error("replyWithPhoto failed:", e?.message || e);
+    }
   }
 
-  return ctx.replyWithPhoto({ url: perfume.photo }, { caption, ...keyboard });
+  return ctx.reply(caption, { parse_mode: "Markdown" });
 }
 
 module.exports = { sendPerfumeCard };

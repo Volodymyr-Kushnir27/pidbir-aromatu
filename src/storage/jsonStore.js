@@ -16,7 +16,6 @@ function readJson(filePath, fallback) {
   }
 }
 
-// atomic write
 function writeJsonAtomic(filePath, data) {
   ensureDir(filePath);
   const tmp = `${filePath}.tmp`;
@@ -29,4 +28,8 @@ function ensureJsonFile(filePath, defaultData) {
   if (!fs.existsSync(filePath)) writeJsonAtomic(filePath, defaultData);
 }
 
-module.exports = { readJson, writeJsonAtomic, ensureJsonFile };
+module.exports = {
+  readJson,
+  writeJsonAtomic,
+  ensureJsonFile,
+};
