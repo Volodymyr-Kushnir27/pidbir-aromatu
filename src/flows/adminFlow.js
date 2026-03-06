@@ -1,182 +1,167 @@
-const { ACTIONS, ADMINS_PATH, USERS_PATH } = require("../config");
-
+const { ADMINS_PATH, USERS_PATH } = require("../config");
 const adminsStore = require("../storage/adminsStore");
 const usersStore = require("../storage/usersStore");
-
 const { normalizePhone } = require("../utils/phone");
-
 const { adminMenuKeyboard } = require("../ui/keyboards");
 
-const state = new Map();
+const adminState = new Map();
 // tgId -> { step, role, phone }
 
+function getTgId(ctx) {
+  return ctx.from?.id;
+}
+
+function setAdminState(ctx, state) {
+  const tgId = getTgId(ctx);
+  if (!tgId) return;
+  adminState.set(tgId, state);
+}
+
 function clearAdminState(ctx) {
-  const id = ctx.from?.id;
-  if (id) state.delete(id);
+  const tgId = getTgId(ctx);
+  if (!tgId) return;
+  adminState.delete(tgId);
 }
 
-function getState(ctx) {
-  const id = ctx.from?.id;
-  if (!id) return null;
-  return state.get(id);
+function getAdminState(ctx) {
+  const tgId = getTgId(ctx);
+  if (!tgId) return null;
+  return adminState.get(tgId) || null;
 }
 
-function setState(ctx, payload) {
-  const id = ctx.from?.id;
-  if (!id) return;
-  state.set(id, payload);
+async function replyAdmin(ctx, text) {
+  return ctx.reply(text, adminMenuKeyboard());
 }
 
 async function onAdminAction(ctx, action) {
-  const tgId = ctx.from?.id;
+  switch (action) {
+    case "ADD_USER":
+      setAdminState(ctx, { step: "add_user_phone", role: "user" });
+      return replyAdmin(ctx, "📱 Введіть номер телефону користувача:");
 
-  if (!tgId) return;
+    case "ADD_ADMIN":
+      setAdminState(ctx, { step: "add_admin_phone", role: "admin" });
+      return replyAdmin(ctx, "📱 Введіть номер телефону адміністратора:");
 
-  if (action === "ADD_USER") {
-    setState(ctx, {
-      step: "phone",
-      role: "user",
-    });
+    case "DEL_USER":
+      setAdminState(ctx, { step: "delete_user_phone" });
+      return replyAdmin(ctx, "🗑 Введіть номер користувача для видалення:");
 
-    return ctx.reply(
-      "📱 Введіть номер телефону користувача:",
-      adminMenuKeyboard(),
-    );
-  }
+    case "DEL_ADMIN":
+      setAdminState(ctx, { step: "delete_admin_phone" });
+      return replyAdmin(ctx, "🗑 Введіть номер адміністратора для видалення:");
 
-  if (action === "ADD_ADMIN") {
-    setState(ctx, {
-      step: "phone",
-      role: "admin",
-    });
+    case "LIST_USERS": {
+      const arr = usersStore.getAll(USERS_PATH);
 
-    return ctx.reply(
-      "📱 Введіть номер телефону адміністратора:",
-      adminMenuKeyboard(),
-    );
-  }
+      if (!arr.length) {
+        return replyAdmin(ctx, "📋 Список продавців порожній.");
+      }
 
-  if (action === "DEL_USER") {
-    setState(ctx, {
-      step: "delete_user",
-    });
+      const text =
+        "📋 Список продавців:\n\n" +
+        arr
+          .map((u, i) => {
+            const fio = u.fio || "без ФІО";
+            const tg = u.tg_id ? ` | tg_id: ${u.tg_id}` : "";
+            return `${i + 1}. ${u.phone} — ${fio}${tg}`;
+          })
+          .join("\n");
 
-    return ctx.reply(
-      "📱 Введіть номер користувача для видалення:",
-      adminMenuKeyboard(),
-    );
-  }
-
-  if (action === "DEL_ADMIN") {
-    setState(ctx, {
-      step: "delete_admin",
-    });
-
-    return ctx.reply(
-      "📱 Введіть номер адміністратора для видалення:",
-      adminMenuKeyboard(),
-    );
-  }
-
-  if (action === "LIST_USERS") {
-    const list = usersStore.getAll(USERS_PATH);
-
-    if (!list.length) {
-      return ctx.reply("Список користувачів порожній", adminMenuKeyboard());
+      return replyAdmin(ctx, text);
     }
 
-    const text = list
-      .map((u) => `${u.phone} — ${u.fio || "без ФІО"}`)
-      .join("\n");
+    case "LIST_ADMINS": {
+      const arr = adminsStore.getAll(ADMINS_PATH);
 
-    return ctx.reply(`👥 Users:\n\n${text}`, adminMenuKeyboard());
-  }
+      if (!arr.length) {
+        return replyAdmin(ctx, "📋 Список адмінів порожній.");
+      }
 
-  if (action === "LIST_ADMINS") {
-    const list = adminsStore.getAll(ADMINS_PATH);
+      const text =
+        "👑 Список адмінів:\n\n" +
+        arr
+          .map((u, i) => {
+            const fio = u.fio || "без ФІО";
+            const tg = u.tg_id ? ` | tg_id: ${u.tg_id}` : "";
+            return `${i + 1}. ${u.phone} — ${fio}${tg}`;
+          })
+          .join("\n");
 
-    if (!list.length) {
-      return ctx.reply("Список адмінів порожній", adminMenuKeyboard());
+      return replyAdmin(ctx, text);
     }
 
-    const text = list
-      .map((u) => `${u.phone} — ${u.fio || "без ФІО"}`)
-      .join("\n");
-
-    return ctx.reply(`👑 Admins:\n\n${text}`, adminMenuKeyboard());
+    default:
+      return replyAdmin(ctx, "⚠️ Невідома адмін-дія.");
   }
 }
 
 async function onAdminText(ctx) {
-  const st = getState(ctx);
-  if (!st) return false;
+  const st = getAdminState(ctx);
+  if (!st?.step) return false;
 
   const text = String(ctx.message?.text || "").trim();
 
-  if (st.step === "phone") {
+  if (st.step === "add_user_phone" || st.step === "add_admin_phone") {
     const phone = normalizePhone(text);
 
     if (!phone) {
-      return ctx.reply("❌ Некоректний номер телефону");
+      return ctx.reply("❌ Некоректний номер. Використайте формат +380...");
     }
 
     st.phone = phone;
-    st.step = "fio";
-
-    setState(ctx, st);
+    st.step = st.role === "user" ? "add_user_fio" : "add_admin_fio";
+    setAdminState(ctx, st);
 
     return ctx.reply("✍️ Тепер введіть ФІО:");
   }
 
-  if (st.step === "fio") {
-    const fio = text;
+  if (st.step === "add_user_fio") {
+    const fio = String(text || "").trim();
 
-    if (st.role === "user") {
-      usersStore.addUser(USERS_PATH, {
-        phone: st.phone,
-        fio,
-      });
+    if (!fio || fio.length < 3) {
+      return ctx.reply("❌ Введіть коректне ФІО.");
     }
 
-    if (st.role === "admin") {
-      adminsStore.addAdmin(ADMINS_PATH, {
-        phone: st.phone,
-        fio,
-      });
+    const res = usersStore.addUser(USERS_PATH, {
+      phone: st.phone,
+      fio,
+    });
+
+    clearAdminState(ctx);
+    return replyAdmin(ctx, res.ok ? "✅ Продавця успішно додано." : `❌ ${res.reason}`);
+  }
+
+  if (st.step === "add_admin_fio") {
+    const fio = String(text || "").trim();
+
+    if (!fio || fio.length < 3) {
+      return ctx.reply("❌ Введіть коректне ФІО.");
     }
 
-    clearAdminState(ctx);
+    const res = adminsStore.addAdmin(ADMINS_PATH, {
+      phone: st.phone,
+      fio,
+    });
 
-    return ctx.reply(
-      "✅ Успішно додано",
-      adminMenuKeyboard(),
-    );
+    clearAdminState(ctx);
+    return replyAdmin(ctx, res.ok ? "✅ Адміна успішно додано." : `❌ ${res.reason}`);
   }
 
-  if (st.step === "delete_user") {
+  if (st.step === "delete_user_phone") {
     const phone = normalizePhone(text);
-
-    usersStore.deleteUser(USERS_PATH, phone);
+    const res = usersStore.delUser(USERS_PATH, phone);
 
     clearAdminState(ctx);
-
-    return ctx.reply(
-      "🗑 Користувача видалено",
-      adminMenuKeyboard(),
-    );
+    return replyAdmin(ctx, res.ok ? "🗑 Продавця видалено." : `❌ ${res.reason}`);
   }
 
-  if (st.step === "delete_admin") {
+  if (st.step === "delete_admin_phone") {
     const phone = normalizePhone(text);
-
-    adminsStore.deleteAdmin(ADMINS_PATH, phone);
+    const res = adminsStore.delAdmin(ADMINS_PATH, phone);
 
     clearAdminState(ctx);
-
-    return ctx.reply(
-      "🗑 Адміна видалено",
-      adminMenuKeyboard(),
-    );
+    return replyAdmin(ctx, res.ok ? "🗑 Адміна видалено." : `❌ ${res.reason}`);
   }
 
   return false;

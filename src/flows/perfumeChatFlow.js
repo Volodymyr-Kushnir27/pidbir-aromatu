@@ -1,11 +1,13 @@
 const { Markup } = require("telegraf");
 const { SEARCH } = require("../config");
 const { PICK_MODE_HELP } = require("../ui/messages");
+
 const { analyzePerfumeIntent } = require("../llm/perfumeAnalyzer");
 const { writeReferencePerfumeIntro } = require("../llm/writeReferencePerfumeIntro");
 const { buildSearchProfile } = require("../llm/perfumeSearchProfile");
 const { attachReasons } = require("../llm/resultExplainer");
 const { rerankAndExplain } = require("../llm/rerankExplainer");
+
 const { findCandidates } = require("../search/candidateSearch");
 const { rerankTopK } = require("../search/candidateRerank");
 const {
@@ -15,9 +17,11 @@ const {
   normalizeCode,
   extractNumericCode,
 } = require("../search/catalogRepo");
+
 const { sendPerfumeCard } = require("./sendPerfumeCard");
 
 const modeState = new Map();
+// tgId -> { mode: "pick" }
 
 function getTgId(ctx) {
   return ctx.from?.id;
@@ -53,6 +57,15 @@ async function onUserPickAction(ctx) {
   );
 }
 
+async function sendExitButton(ctx) {
+  return ctx.reply(
+    "❌ Можете вийти з режиму підбору:",
+    Markup.inlineKeyboard([
+      [Markup.button.callback("❌ Вийти", "EXIT_PICK")],
+    ]),
+  );
+}
+
 async function sendCodeVariants(ctx, items, num) {
   const top = items.slice(0, 5);
 
@@ -67,6 +80,7 @@ async function sendCodeVariants(ctx, items, num) {
     `\n\n✍️ Напишіть точний код з буквою, наприклад: **${top[0]?.number_code || `${num}A`}**`;
 
   await ctx.reply(text, { parse_mode: "Markdown" });
+  return sendExitButton(ctx);
 }
 
 function mergeGptReasons(items, gptSelected = []) {
@@ -132,6 +146,46 @@ function renderMetaComment(item) {
   return parts.length ? `\n\n${parts.join("\n")}` : "";
 }
 
+function hasSearchData(analysis) {
+  return (
+    analysis?.query_type === "reference_perfume" ||
+    analysis?.query_type === "note_search" ||
+    analysis?.query_type === "style_search" ||
+    analysis?.query_type === "code_search" ||
+    (analysis?.search_terms && analysis.search_terms.length) ||
+    (analysis?.notes_top && analysis.notes_top.length) ||
+    (analysis?.notes_heart && analysis.notes_heart.length) ||
+    (analysis?.notes_base && analysis.notes_base.length) ||
+    (analysis?.style && analysis.style.length) ||
+    (analysis?.accords && analysis.accords.length) ||
+    (analysis?.intent_context?.best_for?.length) ||
+    analysis?.intent_context?.projection !== "unknown" ||
+    analysis?.intent_context?.longevity !== "unknown" ||
+    analysis?.intent_context?.age_group !== "unknown" ||
+    (analysis?.intent_context?.image_style?.length)
+  );
+}
+
+function buildPayloadWithExplanations(item) {
+  const why = Array.isArray(item.why_selected) ? item.why_selected : [];
+  const assistantComment = String(item.assistant_comment || "").trim();
+
+  const reasonBlock = why.length
+    ? `\n\n💡 Чому обрано:\n• ${why.join("\n• ")}`
+    : `\n\n💡 Чому обрано:\n• близький за загальним характером`;
+
+  const commentBlock = assistantComment
+    ? `\n\n🗣 ${assistantComment}`
+    : "";
+
+  const metaBlock = renderMetaComment(item);
+
+  return {
+    ...item,
+    short_desc: `${item.short_desc || ""}${reasonBlock}${commentBlock}${metaBlock}`.trim(),
+  };
+}
+
 async function onUserText(ctx) {
   const mode = getMode(ctx);
   if (mode !== "pick") return false;
@@ -158,6 +212,7 @@ async function onUserText(ctx) {
         season: true,
       });
 
+      await sendExitButton(ctx);
       return true;
     }
 
@@ -176,6 +231,7 @@ async function onUserText(ctx) {
           season: true,
         });
 
+        await sendExitButton(ctx);
         return true;
       }
 
@@ -190,11 +246,12 @@ async function onUserText(ctx) {
       { parse_mode: "Markdown" },
     );
 
+    await sendExitButton(ctx);
     return true;
   }
 
   /* =========================
-     2. ANALYZE
+     2. ANALYZE USER INTENT
   ========================= */
   let analysis;
   try {
@@ -202,31 +259,16 @@ async function onUserText(ctx) {
   } catch (e) {
     console.error("analyzePerfumeIntent error:", e);
     await ctx.reply("❌ Не вдалося проаналізувати запит.");
+    await sendExitButton(ctx);
     return true;
   }
 
-  const hasSearchData =
-    analysis?.query_type === "reference_perfume" ||
-    analysis?.query_type === "note_search" ||
-    analysis?.query_type === "style_search" ||
-    analysis?.query_type === "code_search" ||
-    (analysis?.search_terms && analysis.search_terms.length) ||
-    (analysis?.notes_top && analysis.notes_top.length) ||
-    (analysis?.notes_heart && analysis.notes_heart.length) ||
-    (analysis?.notes_base && analysis.notes_base.length) ||
-    (analysis?.style && analysis.style.length) ||
-    (analysis?.accords && analysis.accords.length) ||
-    (analysis?.intent_context?.best_for?.length) ||
-    analysis?.intent_context?.projection !== "unknown" ||
-    analysis?.intent_context?.longevity !== "unknown" ||
-    analysis?.intent_context?.age_group !== "unknown" ||
-    (analysis?.intent_context?.image_style?.length);
-
-  if (!hasSearchData) {
+  if (!hasSearchData(analysis)) {
     await ctx.reply(
       analysis?.user_friendly_reply ||
         "🤔 Не до кінця зрозумів запит.\n\nНапишіть:\n• назву аромату\n• код\n• ноти\n• стиль\n• або ситуацію використання",
     );
+    await sendExitButton(ctx);
     return true;
   }
 
@@ -247,6 +289,7 @@ async function onUserText(ctx) {
       }
     } catch (e) {
       console.error("writeReferencePerfumeIntro error:", e);
+
       if (analysis.user_friendly_reply) {
         await ctx.reply(`✨ ${analysis.user_friendly_reply}`);
       }
@@ -264,6 +307,7 @@ async function onUserText(ctx) {
   } catch (e) {
     console.error("buildSearchProfile error:", e);
     await ctx.reply("❌ Не вдалося побудувати профіль пошуку.");
+    await sendExitButton(ctx);
     return true;
   }
 
@@ -276,6 +320,7 @@ async function onUserText(ctx) {
   } catch (e) {
     console.error("findCandidates error:", e);
     await ctx.reply("❌ Помилка пошуку в базі.");
+    await sendExitButton(ctx);
     return true;
   }
 
@@ -283,6 +328,7 @@ async function onUserText(ctx) {
     await ctx.reply(
       "😔 У базі поки не знайшов вдалих збігів.\n\nМожете уточнити:\n• для кого аромат\n• які ноти\n• який стиль\n• на яку ситуацію\n• який шлейф або стійкість",
     );
+    await sendExitButton(ctx);
     return true;
   }
 
@@ -334,29 +380,14 @@ async function onUserText(ctx) {
 
   if (!top.length) {
     await ctx.reply("❌ Схожих варіантів не знайшов.");
+    await sendExitButton(ctx);
     return true;
   }
 
   await ctx.reply(`✨ Підібрав ${top.length} найбільш схожі варіанти:`);
 
   for (const item of top) {
-    const why = Array.isArray(item.why_selected) ? item.why_selected : [];
-    const assistantComment = String(item.assistant_comment || "").trim();
-
-    const reasonBlock = why.length
-      ? `\n\n💡 Чому обрано:\n• ${why.join("\n• ")}`
-      : `\n\n💡 Чому обрано:\n• близький за загальним характером`;
-
-    const commentBlock = assistantComment
-      ? `\n\n🗣 ${assistantComment}`
-      : "";
-
-    const metaBlock = renderMetaComment(item);
-
-    const payload = {
-      ...item,
-      short_desc: `${item.short_desc || ""}${reasonBlock}${commentBlock}${metaBlock}`.trim(),
-    };
+    const payload = buildPayloadWithExplanations(item);
 
     await sendPerfumeCard(ctx, payload, {
       notes: false,
@@ -364,6 +395,7 @@ async function onUserText(ctx) {
     });
   }
 
+  await sendExitButton(ctx);
   return true;
 }
 

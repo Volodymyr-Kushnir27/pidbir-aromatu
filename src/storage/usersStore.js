@@ -10,6 +10,10 @@ function writeJSON(path, data) {
   writeJsonAtomic(path, data);
 }
 
+function getAll(path) {
+  return readJSON(path);
+}
+
 function findByPhone(path, phoneRaw) {
   const phone = normalizePhone(phoneRaw);
   if (!phone) return null;
@@ -48,7 +52,13 @@ function setFio(path, phoneRaw, fio) {
   return true;
 }
 
-function addUser(path, phoneRaw) {
+function addUser(path, payloadOrPhone) {
+  const isObject =
+    payloadOrPhone && typeof payloadOrPhone === "object" && !Array.isArray(payloadOrPhone);
+
+  const phoneRaw = isObject ? payloadOrPhone.phone : payloadOrPhone;
+  const fioRaw = isObject ? payloadOrPhone.fio : "";
+
   const phone = normalizePhone(phoneRaw);
   if (!phone) return { ok: false, reason: "Некоректний номер." };
 
@@ -57,7 +67,12 @@ function addUser(path, phoneRaw) {
     return { ok: false, reason: "Користувач уже існує." };
   }
 
-  arr.push({ phone, fio: "", tg_id: null });
+  arr.push({
+    phone,
+    fio: String(fioRaw || "").trim(),
+    tg_id: null,
+  });
+
   writeJSON(path, arr);
   return { ok: true };
 }
@@ -77,12 +92,18 @@ function delUser(path, phoneRaw) {
   return { ok: true };
 }
 
+function deleteUser(path, phoneRaw) {
+  return delUser(path, phoneRaw);
+}
+
 module.exports = {
   readJSON,
   writeJSON,
+  getAll,
   findByPhone,
   attachTgId,
   setFio,
   addUser,
   delUser,
+  deleteUser,
 };

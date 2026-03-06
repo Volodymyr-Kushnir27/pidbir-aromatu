@@ -10,9 +10,14 @@ function writeJSON(path, data) {
   writeJsonAtomic(path, data);
 }
 
+function getAll(path) {
+  return readJSON(path);
+}
+
 function findByPhone(path, phoneRaw) {
   const phone = normalizePhone(phoneRaw);
   if (!phone) return null;
+
   const arr = readJSON(path);
   return arr.find((u) => normalizePhone(u.phone) === phone) || null;
 }
@@ -47,7 +52,13 @@ function setFio(path, phoneRaw, fio) {
   return true;
 }
 
-function addAdmin(path, phoneRaw) {
+function addAdmin(path, payloadOrPhone) {
+  const isObject =
+    payloadOrPhone && typeof payloadOrPhone === "object" && !Array.isArray(payloadOrPhone);
+
+  const phoneRaw = isObject ? payloadOrPhone.phone : payloadOrPhone;
+  const fioRaw = isObject ? payloadOrPhone.fio : "";
+
   const phone = normalizePhone(phoneRaw);
   if (!phone) return { ok: false, reason: "Некоректний номер." };
 
@@ -56,7 +67,12 @@ function addAdmin(path, phoneRaw) {
     return { ok: false, reason: "Адмін уже існує." };
   }
 
-  arr.push({ phone, fio: "", tg_id: null });
+  arr.push({
+    phone,
+    fio: String(fioRaw || "").trim(),
+    tg_id: null,
+  });
+
   writeJSON(path, arr);
   return { ok: true };
 }
@@ -76,12 +92,18 @@ function delAdmin(path, phoneRaw) {
   return { ok: true };
 }
 
+function deleteAdmin(path, phoneRaw) {
+  return delAdmin(path, phoneRaw);
+}
+
 module.exports = {
   readJSON,
   writeJSON,
+  getAll,
   findByPhone,
   attachTgId,
   setFio,
   addAdmin,
   delAdmin,
+  deleteAdmin,
 };
