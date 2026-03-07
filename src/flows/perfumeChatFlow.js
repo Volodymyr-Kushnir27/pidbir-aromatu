@@ -293,21 +293,59 @@ function itemMatchesGender(item, requestedGender) {
     g.includes("unisex");
 
   if (requestedGender === "male") {
-    // чоловічі запити: чоловічі + унісекс
     return isMale || isUnisex;
   }
 
   if (requestedGender === "female") {
-    // жіночі запити: жіночі + унісекс
     return isFemale || isUnisex;
   }
 
   if (requestedGender === "unisex") {
-    // унісекс запити: тільки унісекс
     return isUnisex;
   }
 
   return true;
+}
+
+function genderPriorityScore(item, requestedGender) {
+  const g = norm(item?.gender);
+
+  const isFemale =
+    g.includes("жі") ||
+    g.includes("жен") ||
+    g.includes("female") ||
+    g.includes("women") ||
+    g.includes("woman");
+
+  const isMale =
+    g.includes("чол") ||
+    g.includes("муж") ||
+    g.includes("male") ||
+    g.includes("men") ||
+    g.includes("man");
+
+  const isUnisex =
+    g.includes("уніс") ||
+    g.includes("unisex");
+
+  if (requestedGender === "female") {
+    if (isFemale) return 3;
+    if (isUnisex) return 2;
+    return 0;
+  }
+
+  if (requestedGender === "male") {
+    if (isMale) return 3;
+    if (isUnisex) return 2;
+    return 0;
+  }
+
+  if (requestedGender === "unisex") {
+    if (isUnisex) return 3;
+    return 0;
+  }
+
+  return 1;
 }
 
 function applyHardFilters(items, text, analysis, searchProfile) {
@@ -317,6 +355,16 @@ function applyHardFilters(items, text, analysis, searchProfile) {
 
   if (requestedGender) {
     filtered = filtered.filter((item) => itemMatchesGender(item, requestedGender));
+
+    // ВАЖЛИВО:
+    // жіночі/чоловічі мають бути вище за унісекс
+    filtered.sort((a, b) => {
+      const pa = genderPriorityScore(a, requestedGender);
+      const pb = genderPriorityScore(b, requestedGender);
+
+      if (pb !== pa) return pb - pa;
+      return 0;
+    });
   }
 
   return uniqById(filtered);
@@ -325,31 +373,59 @@ function applyHardFilters(items, text, analysis, searchProfile) {
 function isFollowupForMore(text) {
   const t = norm(text);
 
-  return (
+  if (!t) return false;
+
+  // короткі команди
+  if (
     t === "ще" ||
-    t === "ще 3" ||
-    t === "дай ще" ||
-    t === "дай ще 3" ||
-    t === "покажи ще" ||
-    t === "покажи ще 3" ||
+    t === "далі" ||
+    t === "інші" ||
+    t === "ще варіанти" ||
+    t === "інші варіанти" ||
     t === "які ще є" ||
     t === "що ще є" ||
-    t === "ще якісь" ||
-    t === "ще варіанти" ||
-    t === "інші" ||
-    t === "інші варіанти" ||
-    t === "далі" ||
+    t === "покажи ще" ||
     t === "ще аромати" ||
     t === "ще парфуми"
-  );
+  ) {
+    return true;
+  }
+
+  // більш вільні фрази
+  if (
+    /\b(ще|далі)\b/.test(t) &&
+    /\b(аромат|аромати|варіант|варіанти|парфум|парфуми)\b/.test(t)
+  ) {
+    return true;
+  }
+
+  if (
+    /\b(дай|покажи|підбери|знайди)\b/.test(t) &&
+    /\b(ще|далі)\b/.test(t)
+  ) {
+    return true;
+  }
+
+  // приклади: "підбери ще 5", "знайди ще 5 варіантів", "ще 3 аромати"
+  if (
+    /\bще\b/.test(t) &&
+    /\b\d{1,2}\b/.test(t)
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function parseBatchSize(text, fallback = 3) {
-  const m = String(text || "").match(/\b(\d{1,2})\b/);
+  const t = String(text || "").toLowerCase();
+
+  const m = t.match(/\b(\d{1,2})\b/);
   if (!m) return fallback;
 
   const n = Number(m[1]);
   if (!n || n < 1) return fallback;
+
   return Math.min(n, 10);
 }
 
@@ -427,9 +503,7 @@ async function onUserText(ctx) {
   const text = String(ctx.message?.text || "").trim();
   if (!text) return true;
 
-  /* =========================
-     A. FOLLOW-UP: "ще", "дай ще", ...
-  ========================= */
+  // 1. Спочатку перевіряємо продовження попереднього пошуку
   if (isFollowupForMore(text)) {
     const saved = getLastSearch(ctx);
     return sendNextBatchFromState(ctx, saved, text);
