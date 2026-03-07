@@ -9,8 +9,6 @@ const { rerankAndExplain } = require("../llm/rerankExplainer");
 
 const { findCandidates } = require("../search/candidateSearch");
 const { rerankTopK } = require("../search/candidateRerank");
-const catalogRepo = require("../search/catalogRepo");
-
 const {
   findByExactName,
   findByNumberCode,
@@ -18,12 +16,22 @@ const {
   looksLikePerfumeCode,
   normalizeCode,
   extractNumericCode,
-} = catalogRepo;
+} = require("../search/catalogRepo");
 
 const { sendPerfumeCard } = require("./sendPerfumeCard");
 
 const modeState = new Map();
-// tgId -> { mode: "pick" }
+// tgId -> {
+//   mode: "pick",
+//   lastSearch: {
+//     originalText,
+//     analysis,
+//     searchProfile,
+//     allItems,
+//     offset,
+//     sentIds
+//   }
+// }
 
 function getTgId(ctx) {
   return ctx.from?.id;
@@ -32,7 +40,12 @@ function getTgId(ctx) {
 function setMode(ctx, mode) {
   const tgId = getTgId(ctx);
   if (!tgId) return;
-  modeState.set(tgId, { mode });
+
+  const prev = modeState.get(tgId) || {};
+  modeState.set(tgId, {
+    ...prev,
+    mode,
+  });
 }
 
 function getMode(ctx) {
@@ -47,35 +60,53 @@ function disableMode(ctx) {
   modeState.delete(tgId);
 }
 
+function setLastSearch(ctx, payload) {
+  const tgId = getTgId(ctx);
+  if (!tgId) return;
+
+  const prev = modeState.get(tgId) || {};
+  modeState.set(tgId, {
+    ...prev,
+    mode: prev.mode || "pick",
+    lastSearch: payload,
+  });
+}
+
+function getLastSearch(ctx) {
+  const tgId = getTgId(ctx);
+  if (!tgId) return null;
+  return modeState.get(tgId)?.lastSearch || null;
+}
+
+function clearLastSearch(ctx) {
+  const tgId = getTgId(ctx);
+  if (!tgId) return;
+
+  const prev = modeState.get(tgId) || {};
+  modeState.set(tgId, {
+    ...prev,
+    lastSearch: null,
+  });
+}
+
 async function onUserPickAction(ctx) {
   setMode(ctx, "pick");
+  clearLastSearch(ctx);
   return ctx.reply(PICK_MODE_HELP);
 }
 
 /* =========================
    Helpers
 ========================= */
-function normText(s) {
-  return String(s || "")
-    .toLowerCase()
-    .replace(/["'`“”‘’]/g, "")
-    .replace(/[()]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function norm(s) {
+  return String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function tokenizeName(s) {
-  return normText(s)
-    .split(/[^\p{L}\p{N}]+/u)
-    .map((x) => x.trim())
-    .filter((x) => x.length >= 2);
-}
-
-function uniqById(arr) {
+function uniqById(items) {
   const seen = new Set();
   const out = [];
 
-  for (const item of arr || []) {
+  for (const item of items || []) {
     const id = Number(item?.id);
     if (!id || seen.has(id)) continue;
     seen.add(id);
@@ -83,158 +114,6 @@ function uniqById(arr) {
   }
 
   return out;
-}
-
-function scoreNameMatch(query, item) {
-  const q = normText(query);
-  const name = normText(item?.name || "");
-  const code = normText(item?.number_code || "");
-  const qTokens = tokenizeName(q);
-  const nTokens = tokenizeName(name);
-
-  let score = 0;
-
-  if (!q || !name) return score;
-
-  if (name === q) score += 1000;
-  if (code && code === q) score += 900;
-
-  if (name.includes(q)) score += 300;
-  if (q.includes(name) && name.length >= 4) score += 120;
-
-  for (const token of qTokens) {
-    if (name.includes(token)) score += 45;
-    if (code.includes(token)) score += 35;
-  }
-
-  for (const token of qTokens) {
-    if (nTokens.includes(token)) score += 20;
-  }
-
-  // бонус якщо всі токени запиту є в назві
-  if (qTokens.length && qTokens.every((t) => name.includes(t))) {
-    score += 180;
-  }
-
-  // штраф за дуже далекі по довжині назви
-  score -= Math.abs(name.length - q.length) * 0.5;
-
-  return score;
-}
-
-function isLikelyConcretePerfumeQuery(text, analysis) {
-  const raw = String(text || "").trim();
-
-  if (!raw) return false;
-  if (looksLikePerfumeCode(raw)) return true;
-
-  if (analysis?.query_type === "reference_perfume") return true;
-
-  const tokens = tokenizeName(raw);
-
-  if (tokens.length >= 2 && tokens.length <= 6) {
-    const hasDigits = /\d/.test(raw);
-    const hasQuotes = /["'“”]/.test(raw);
-    const hasLatin = /[a-z]/i.test(raw);
-
-    if (hasDigits || hasQuotes || hasLatin) return true;
-  }
-
-  return false;
-}
-
-function getLooseNameCandidates(query, limit = 10) {
-  const results = [];
-
-  if (typeof catalogRepo.findPerfumesByNameLike === "function") {
-    try {
-      const direct = catalogRepo.findPerfumesByNameLike(query, { limit });
-      if (Array.isArray(direct) && direct.length) {
-        results.push(...direct);
-      }
-    } catch (e) {
-      console.error("findPerfumesByNameLike error:", e);
-    }
-  }
-
-  // fallback: спроба через target_name variants, якщо є код або коротка назва
-  if (!results.length && typeof catalogRepo.getPerfumeById === "function") {
-    // без додаткового джерела тут нічого не робимо
-  }
-
-  return uniqById(results)
-    .map((item) => ({ ...item, __nameScore: scoreNameMatch(query, item) }))
-    .filter((item) => item.__nameScore > 80)
-    .sort((a, b) => b.__nameScore - a.__nameScore)
-    .slice(0, limit);
-}
-
-async function tryReplySinglePerfume(ctx, item, prefixText = "") {
-  if (prefixText) {
-    await ctx.reply(prefixText, { parse_mode: "Markdown" });
-  }
-
-  await sendPerfumeCard(ctx, item, {
-    notes: true,
-    season: true,
-  });
-
-  return true;
-}
-
-async function tryFindByNameAndReply(ctx, query, opts = {}) {
-  const {
-    exactPrefix = "",
-    singleLoosePrefix = "",
-    multipleLoosePrefix = "",
-    allowMultipleList = true,
-  } = opts;
-
-  const cleaned = String(query || "").trim();
-  if (!cleaned) return false;
-
-  if (typeof findByExactName === "function") {
-    try {
-      const exact = findByExactName(cleaned);
-      if (exact) {
-        await tryReplySinglePerfume(
-          ctx,
-          exact,
-          exactPrefix || `✅ Знайшов аромат **${exact.name}**:`,
-        );
-        return true;
-      }
-    } catch (e) {
-      console.error("findByExactName error:", e);
-    }
-  }
-
-  const loose = getLooseNameCandidates(cleaned, 7);
-
-  if (loose.length === 1) {
-    await tryReplySinglePerfume(
-      ctx,
-      loose[0],
-      singleLoosePrefix || `✅ Знайшов аромат за назвою **${loose[0].name}**:`,
-    );
-    return true;
-  }
-
-  if (loose.length > 1 && allowMultipleList) {
-    const listText =
-      (multipleLoosePrefix || `🔎 За назвою **${cleaned}** знайшов кілька близьких варіантів:`) +
-      "\n\n" +
-      loose
-        .slice(0, 5)
-        .map((item, i) => `${i + 1}. **${item.name}**${item.number_code ? ` — ${item.number_code}` : ""}`)
-        .join("\n") +
-      "\n\n✍️ Напишіть точнішу назву або код.";
-
-    await ctx.reply(listText, { parse_mode: "Markdown" });
-    return true;
-  }
-
-  return false;
 }
 
 function mergeGptReasons(items, gptSelected = []) {
@@ -337,6 +216,210 @@ function buildPayloadWithExplanations(item) {
   };
 }
 
+function detectRequestedGender(text, analysis, searchProfile) {
+  const t = norm(text);
+
+  if (
+    /\b(жіночі|жіночий|жіноче|для жінки|для дівчини|дівочі|женские|женский|для женщины|for women|female)\b/i.test(
+      t,
+    )
+  ) {
+    return "female";
+  }
+
+  if (
+    /\b(чоловічі|чоловічий|чоловіче|для чоловіка|для хлопця|мужские|мужской|для мужчины|for men|male)\b/i.test(
+      t,
+    )
+  ) {
+    return "male";
+  }
+
+  if (
+    /\b(унісекс|унісексові|unisex)\b/i.test(t)
+  ) {
+    return "unisex";
+  }
+
+  const candidates = [
+    analysis?.gender,
+    analysis?.for_gender,
+    analysis?.target_gender,
+    analysis?.intent_context?.gender,
+    searchProfile?.gender,
+    searchProfile?.for_gender,
+  ]
+    .filter(Boolean)
+    .map((x) => norm(x));
+
+  for (const g of candidates) {
+    if (["female", "women", "woman", "жіночий", "жіночі", "женский", "женские"].includes(g)) {
+      return "female";
+    }
+    if (["male", "men", "man", "чоловічий", "чоловічі", "мужской", "мужские"].includes(g)) {
+      return "male";
+    }
+    if (["unisex", "унісекс"].includes(g)) {
+      return "unisex";
+    }
+  }
+
+  return null;
+}
+
+function itemMatchesGender(item, requestedGender) {
+  if (!requestedGender) return true;
+
+  const g = norm(item?.gender);
+
+  if (!g) return true;
+
+  const isFemale =
+    g.includes("жі") ||
+    g.includes("жен") ||
+    g.includes("female") ||
+    g.includes("women") ||
+    g.includes("woman");
+
+  const isMale =
+    g.includes("чол") ||
+    g.includes("муж") ||
+    g.includes("male") ||
+    g.includes("men") ||
+    g.includes("man");
+
+  const isUnisex =
+    g.includes("уніс") ||
+    g.includes("unisex");
+
+  if (requestedGender === "male") {
+    // чоловічі запити: чоловічі + унісекс
+    return isMale || isUnisex;
+  }
+
+  if (requestedGender === "female") {
+    // жіночі запити: жіночі + унісекс
+    return isFemale || isUnisex;
+  }
+
+  if (requestedGender === "unisex") {
+    // унісекс запити: тільки унісекс
+    return isUnisex;
+  }
+
+  return true;
+}
+
+function applyHardFilters(items, text, analysis, searchProfile) {
+  const requestedGender = detectRequestedGender(text, analysis, searchProfile);
+
+  let filtered = [...(items || [])];
+
+  if (requestedGender) {
+    filtered = filtered.filter((item) => itemMatchesGender(item, requestedGender));
+  }
+
+  return uniqById(filtered);
+}
+
+function isFollowupForMore(text) {
+  const t = norm(text);
+
+  return (
+    t === "ще" ||
+    t === "ще 3" ||
+    t === "дай ще" ||
+    t === "дай ще 3" ||
+    t === "покажи ще" ||
+    t === "покажи ще 3" ||
+    t === "які ще є" ||
+    t === "що ще є" ||
+    t === "ще якісь" ||
+    t === "ще варіанти" ||
+    t === "інші" ||
+    t === "інші варіанти" ||
+    t === "далі" ||
+    t === "ще аромати" ||
+    t === "ще парфуми"
+  );
+}
+
+function parseBatchSize(text, fallback = 3) {
+  const m = String(text || "").match(/\b(\d{1,2})\b/);
+  if (!m) return fallback;
+
+  const n = Number(m[1]);
+  if (!n || n < 1) return fallback;
+  return Math.min(n, 10);
+}
+
+async function sendNextBatchFromState(ctx, saved, text = "") {
+  if (!saved || !Array.isArray(saved.allItems) || !saved.allItems.length) {
+    await ctx.reply("ℹ️ Немає збереженого попереднього пошуку. Напишіть новий запит.");
+    return true;
+  }
+
+  const batchSize = parseBatchSize(text, 3);
+  const sentIds = Array.isArray(saved.sentIds) ? saved.sentIds : [];
+  const remaining = saved.allItems.filter((x) => !sentIds.includes(x.id));
+
+  if (!remaining.length) {
+    await ctx.reply("✅ Це були всі варіанти за попереднім запитом.");
+    clearLastSearch(ctx);
+    return true;
+  }
+
+  await ctx.reply(`🔎 Показую ще ${Math.min(batchSize, remaining.length)} варіанти за попереднім запитом:`);
+
+  const batch = remaining.slice(0, batchSize);
+
+  for (const item of batch) {
+    const payload = buildPayloadWithExplanations(item);
+
+    await sendPerfumeCard(ctx, payload, {
+      notes: false,
+      season: false,
+    });
+  }
+
+  const nextSentIds = [...sentIds, ...batch.map((x) => x.id)];
+  const nextOffset = nextSentIds.length;
+
+  setLastSearch(ctx, {
+    ...saved,
+    sentIds: nextSentIds,
+    offset: nextOffset,
+  });
+
+  const left = saved.allItems.length - nextSentIds.length;
+  if (left > 0) {
+    await ctx.reply(`➡️ Ще залишилось ${left} варіантів. Напишіть: "ще"`);
+  } else {
+    await ctx.reply("✅ Це були всі варіанти за цим запитом.");
+  }
+
+  return true;
+}
+
+function reorderWithGptPriority(allItems, gptSelected = []) {
+  if (!Array.isArray(allItems) || !allItems.length) return [];
+  if (!Array.isArray(gptSelected) || !gptSelected.length) return allItems;
+
+  const selectedIds = gptSelected.map((x) => Number(x.id));
+  const selectedSet = new Set(selectedIds);
+
+  const prioritized = selectedIds
+    .map((id) => allItems.find((x) => Number(x.id) === id))
+    .filter(Boolean);
+
+  const rest = allItems.filter((x) => !selectedSet.has(Number(x.id)));
+
+  return uniqById([...prioritized, ...rest]);
+}
+
+/* =========================
+   Main
+========================= */
 async function onUserText(ctx) {
   const mode = getMode(ctx);
   if (mode !== "pick") return false;
@@ -345,19 +428,31 @@ async function onUserText(ctx) {
   if (!text) return true;
 
   /* =========================
-     0. DIRECT NAME LOOKUP
+     A. FOLLOW-UP: "ще", "дай ще", ...
   ========================= */
-  {
-    const handledByName = await tryFindByNameAndReply(ctx, text, {
-      exactPrefix: "",
-      singleLoosePrefix: "",
-      multipleLoosePrefix: "",
-      allowMultipleList: true,
+  if (isFollowupForMore(text)) {
+    const saved = getLastSearch(ctx);
+    return sendNextBatchFromState(ctx, saved, text);
+  }
+
+  /* =========================
+     0. EXACT NAME MATCH
+  ========================= */
+  const exactByName = findByExactName(text);
+
+  if (exactByName) {
+    clearLastSearch(ctx);
+
+    await ctx.reply(`✅ Знайшов точний збіг за назвою **${exactByName.name}**:`, {
+      parse_mode: "Markdown",
     });
 
-    if (handledByName) {
-      return true;
-    }
+    await sendPerfumeCard(ctx, exactByName, {
+      notes: true,
+      season: true,
+    });
+
+    return true;
   }
 
   await ctx.reply("🔎 Аналізую аромат...");
@@ -365,11 +460,13 @@ async function onUserText(ctx) {
   /* =========================
      1. SEARCH BY CODE
   ========================= */
-  if (typeof looksLikePerfumeCode === "function" && looksLikePerfumeCode(text)) {
+  if (looksLikePerfumeCode(text)) {
     const code = normalizeCode(text);
     const byExactCode = findByNumberCode(code);
 
     if (byExactCode) {
+      clearLastSearch(ctx);
+
       await ctx.reply(`✅ Знайшов аромат за кодом **${code}**:`, {
         parse_mode: "Markdown",
       });
@@ -387,6 +484,8 @@ async function onUserText(ctx) {
       const byNumeric = findAllByNumericCode(num);
 
       if (byNumeric.length === 1) {
+        clearLastSearch(ctx);
+
         await ctx.reply(
           `✅ Знайшов аромат за номером **${num}**. У базі він записаний як **${byNumeric[0].number_code}**:`,
           { parse_mode: "Markdown" },
@@ -443,29 +542,7 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     3. IF REFERENCE PERFUME -> FIND THE PERFUME ITSELF FIRST
-  ========================= */
-  if (analysis?.query_type === "reference_perfume") {
-    const refName = String(
-      analysis?.target_name ||
-      analysis?.reference_name ||
-      text
-    ).trim();
-
-    const handledReference = await tryFindByNameAndReply(ctx, refName, {
-      exactPrefix: `✅ Знайшов аромат **${refName}**:`,
-      singleLoosePrefix: `✅ Знайшов аромат за назвою **${refName}**:`,
-      multipleLoosePrefix: `🔎 За назвою **${refName}** знайшов кілька близьких варіантів:`,
-      allowMultipleList: true,
-    });
-
-    if (handledReference) {
-      return true;
-    }
-  }
-
-  /* =========================
-     4. BEAUTIFUL INTRO / SEARCH EXPLANATION
+     3. BEAUTIFUL INTRO FOR REFERENCE PERFUME
   ========================= */
   if (analysis.query_type === "reference_perfume") {
     try {
@@ -491,7 +568,7 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     5. BUILD SEARCH PROFILE
+     4. BUILD SEARCH PROFILE
   ========================= */
   let searchProfile;
   try {
@@ -503,11 +580,11 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     6. DB SEARCH
+     5. DB SEARCH
   ========================= */
   let candidates = [];
   try {
-    candidates = findCandidates(searchProfile, SEARCH.LIMIT_CANDIDATES || 80);
+    candidates = findCandidates(searchProfile, SEARCH.LIMIT_CANDIDATES || 120);
   } catch (e) {
     console.error("findCandidates error:", e);
     await ctx.reply("❌ Помилка пошуку в базі.");
@@ -522,45 +599,53 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     7. IF QUERY LOOKS LIKE A CONCRETE PERFUME -> CHECK CANDIDATES FOR EXACT/BEST NAME
+     6. HARD FILTERS (IMPORTANT)
   ========================= */
-  if (isLikelyConcretePerfumeQuery(text, analysis)) {
-    const concreteQuery = String(
-      analysis?.target_name ||
-      analysis?.reference_name ||
-      text
-    ).trim();
+  candidates = applyHardFilters(candidates, text, analysis, searchProfile);
 
-    const topNameHit = [...candidates]
-      .map((item) => ({ item, score: scoreNameMatch(concreteQuery, item) }))
-      .sort((a, b) => b.score - a.score)[0];
+  if (!candidates.length) {
+    const requestedGender = detectRequestedGender(text, analysis, searchProfile);
 
-    if (topNameHit && topNameHit.score >= 180) {
-      await ctx.reply(`✅ Знайшов найближчий збіг за назвою **${topNameHit.item.name}**:`, {
-        parse_mode: "Markdown",
-      });
-
-      await sendPerfumeCard(ctx, topNameHit.item, {
-        notes: true,
-        season: true,
-      });
-
+    if (requestedGender === "female") {
+      await ctx.reply(
+        "❌ За запитом знайшлися результати, але після жорсткого фільтра не залишилось **жіночих** ароматів.\n\nУточніть ноти або стиль.",
+        { parse_mode: "Markdown" },
+      );
       return true;
     }
+
+    if (requestedGender === "male") {
+      await ctx.reply(
+        "❌ За запитом знайшлися результати, але після жорсткого фільтра не залишилось **чоловічих** ароматів.\n\nУточніть ноти або стиль.",
+        { parse_mode: "Markdown" },
+      );
+      return true;
+    }
+
+    if (requestedGender === "unisex") {
+      await ctx.reply(
+        "❌ За запитом не знайшов відповідних **унісекс** ароматів.\n\nУточніть ноти або стиль.",
+        { parse_mode: "Markdown" },
+      );
+      return true;
+    }
+
+    await ctx.reply("❌ Після фільтрації відповідних ароматів не залишилось.");
+    return true;
   }
 
   /* =========================
-     8. LOCAL FALLBACK TOP-K
+     7. BUILD LONG LIST FOR CONTINUATION
   ========================= */
-  let top = rerankTopK(
+  let allItems = rerankTopK(
     candidates,
     searchProfile,
     analysis.target_name,
-    SEARCH.TOP_K || 3,
+    50,
   );
 
   /* =========================
-     9. GPT RERANK + EXPLAIN
+     8. GPT RERANK + EXPLAIN (TOP priority, not only 3 forever)
   ========================= */
   try {
     const gptSelected = await rerankAndExplain({
@@ -568,53 +653,71 @@ async function onUserText(ctx) {
       analysis,
       searchProfile,
       candidates: candidates.slice(0, 10),
-      topK: SEARCH.TOP_K || 3,
+      topK: Math.min(10, candidates.length),
     });
 
     if (Array.isArray(gptSelected) && gptSelected.length) {
-      const selectedIds = gptSelected.map((x) => Number(x.id));
-      const selectedItems = candidates.filter((x) =>
-        selectedIds.includes(Number(x.id)),
-      );
-
-      if (selectedItems.length) {
-        top = selectedIds
-          .map((id) => selectedItems.find((x) => Number(x.id) === id))
-          .filter(Boolean)
-          .slice(0, SEARCH.TOP_K || 3);
-
-        top = mergeGptReasons(top, gptSelected);
-      }
+      allItems = mergeGptReasons(allItems, gptSelected);
+      allItems = reorderWithGptPriority(allItems, gptSelected);
     }
   } catch (e) {
     console.error("rerankAndExplain error:", e);
   }
 
   /* =========================
-     10. LOCAL FALLBACK REASONS
+     9. LOCAL REASONS
   ========================= */
-  top = attachReasons(top, searchProfile);
+  allItems = attachReasons(allItems, searchProfile);
+  allItems = uniqById(allItems);
 
-  if (!top.length) {
+  if (!allItems.length) {
     await ctx.reply("❌ Схожих варіантів не знайшов.");
     return true;
   }
 
-  if (analysis?.query_type === "reference_perfume" || isLikelyConcretePerfumeQuery(text, analysis)) {
-    await ctx.reply(
-      `❌ Точного збігу не знайшов, але підібрав ${top.length} найбільш схожі варіанти:`,
-    );
-  } else {
-    await ctx.reply(`✨ Підібрав ${top.length} найбільш схожі варіанти:`);
-  }
+  /* =========================
+     10. SAVE SEARCH STATE
+  ========================= */
+  setLastSearch(ctx, {
+    originalText: text,
+    analysis,
+    searchProfile,
+    allItems,
+    offset: 0,
+    sentIds: [],
+  });
 
-  for (const item of top) {
+  /* =========================
+     11. SEND FIRST BATCH
+  ========================= */
+  await ctx.reply(`✨ Підібрав ${Math.min(3, allItems.length)} найбільш схожі варіанти:`);
+
+  const firstBatch = allItems.slice(0, 3);
+
+  for (const item of firstBatch) {
     const payload = buildPayloadWithExplanations(item);
 
     await sendPerfumeCard(ctx, payload, {
       notes: false,
       season: false,
     });
+  }
+
+  const sentIds = firstBatch.map((x) => x.id);
+  const offset = sentIds.length;
+
+  setLastSearch(ctx, {
+    originalText: text,
+    analysis,
+    searchProfile,
+    allItems,
+    offset,
+    sentIds,
+  });
+
+  const left = allItems.length - offset;
+  if (left > 0) {
+    await ctx.reply(`➡️ Є ще ${left} варіантів. Напишіть: "ще" або "дай ще 3"`);
   }
 
   return true;
