@@ -9,17 +9,13 @@ if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY missing");
 
 const DATA_DIR = process.env.DATA_DIR || "/var/data";
 
-const SUPER_ADMIN_TG_ID = Number(process.env.SUPER_ADMIN_TG_ID || 0);
-
-module.exports = {
-  SUPER_ADMIN_TG_ID
-};
-
 module.exports = {
   BOT_TOKEN: must("BOT_TOKEN"),
   OPENAI_API_KEY,
 
   CHAT_MODEL: process.env.CHAT_MODEL || "gpt-4o-mini",
+
+  SUPER_ADMIN_TG_ID: Number(process.env.SUPER_ADMIN_TG_ID || 0),
 
   DB_PATH:
     process.env.CATALOG_DB_PATH ||
@@ -60,5 +56,4 @@ module.exports = {
     TOP_K: 3,
     MAX_ROWS_SCAN: 600,
   },
-  
 };

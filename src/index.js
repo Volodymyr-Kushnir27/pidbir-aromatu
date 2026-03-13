@@ -10,7 +10,14 @@ process.on("uncaughtException", (e) => {
 
 const { Telegraf } = require("telegraf");
 
-const { BOT_TOKEN, ADMINS_PATH, USERS_PATH, ACTIONS } = require("./config");
+const {
+  BOT_TOKEN,
+  ADMINS_PATH,
+  USERS_PATH,
+  ACTIONS,
+  SUPER_ADMIN_TG_ID,
+} = require("./config");
+
 const { getRole } = require("./middleware/auth");
 
 const adminsStore = require("./storage/adminsStore");
@@ -87,6 +94,15 @@ function normalizeFio(text) {
   return fio;
 }
 
+function isSuperAdmin(ctx) {
+  return Number(ctx.from?.id || 0) === Number(SUPER_ADMIN_TG_ID || 0);
+}
+
+function getEffectiveRole(ctx) {
+  if (isSuperAdmin(ctx)) return "admin";
+  return getRole(ctx);
+}
+
 function findByPhone(rawPhone) {
   const phone = normalizePhone(rawPhone);
   if (!phone) return null;
@@ -125,7 +141,7 @@ function setFio(kind, phone, fio) {
 }
 
 async function showHome(ctx) {
-  const role = getRole(ctx);
+  const role = getEffectiveRole(ctx);
 
   try {
     clearAdminState(ctx);
@@ -170,6 +186,10 @@ bot.command("myid", async (ctx) => {
    Contact registration
 ========================= */
 bot.on("contact", async (ctx) => {
+  if (isSuperAdmin(ctx)) {
+    return showHome(ctx);
+  }
+
   const contact = ctx.message?.contact;
   if (!contact) return;
 
@@ -198,62 +218,69 @@ bot.on("contact", async (ctx) => {
    Text router
 ========================= */
 bot.on("text", async (ctx) => {
-  const role = getRole(ctx);
+  const role = getEffectiveRole(ctx);
   const tgId = ctx.from?.id;
   const text = String(ctx.message?.text || "").trim();
 
   if (!tgId) return;
 
-  // admin flow
+  // super admin / admin flow
   if (role === "admin") {
     const handledAdmin = await onAdminText(ctx);
     if (handledAdmin) return;
   }
 
-  // registration flow
-  const state = regState.get(tgId);
-  if (state?.step === "fio") {
-    const fio = normalizeFio(text);
-    if (!fio) {
-      return ctx.reply(
-        "❌ ФІО має бути мінімум 2 слова. Наприклад: 'Іваненко Іван'.",
-      );
-    }
+  // registration flow тільки для не-super-admin
+  if (!isSuperAdmin(ctx)) {
+    const state = regState.get(tgId);
 
-    const found = findByPhone(state.phone);
-    if (!found) {
-      regState.delete(tgId);
-      return ctx.reply("⛔ Номер не знайдено у списку. Зверніться до адміна.");
-    }
+    if (state?.step === "fio") {
+      const fio = normalizeFio(text);
+      if (!fio) {
+        return ctx.reply(
+          "❌ ФІО має бути мінімум 2 слова. Наприклад: 'Іваненко Іван'.",
+        );
+      }
 
-    attachTgId(found.kind, found.phone, tgId);
-    setFio(found.kind, found.phone, fio);
+      const found = findByPhone(state.phone);
+      if (!found) {
+        regState.delete(tgId);
+        return ctx.reply("⛔ Номер не знайдено у списку. Зверніться до адміна.");
+      }
 
-    regState.delete(tgId);
-    return showHome(ctx);
-  }
-
-  // manual phone input
-  const maybePhone = normalizePhone(text);
-  if (maybePhone) {
-    const found = findByPhone(maybePhone);
-    if (!found) {
-      return ctx.reply("⛔ Номер не знайдено у списку. Зверніться до адміна.");
-    }
-
-    if (found.record?.fio) {
       attachTgId(found.kind, found.phone, tgId);
+      setFio(found.kind, found.phone, fio);
+
+      regState.delete(tgId);
       return showHome(ctx);
     }
 
-    regState.set(tgId, { step: "fio", phone: found.phone });
-    return ctx.reply("✍️ Введіть ваше ФІО (Прізвище Ім’я).");
+    // manual phone input
+    const maybePhone = normalizePhone(text);
+    if (maybePhone) {
+      const found = findByPhone(maybePhone);
+      if (!found) {
+        return ctx.reply("⛔ Номер не знайдено у списку. Зверніться до адміна.");
+      }
+
+      if (found.record?.fio) {
+        attachTgId(found.kind, found.phone, tgId);
+        return showHome(ctx);
+      }
+
+      regState.set(tgId, { step: "fio", phone: found.phone });
+      return ctx.reply("✍️ Введіть ваше ФІО (Прізвище Ім’я).");
+    }
   }
 
   // perfume/user flow
   if (role === "admin" || role === "user") {
     const handledUser = await onUserText(ctx);
     if (handledUser) return;
+  }
+
+  if (text === "/start" || text === "/home") {
+    return showHome(ctx);
   }
 
   return ctx.reply("Використайте /start щоб відкрити меню.");
@@ -267,7 +294,7 @@ bot.on("callback_query", async (ctx) => {
   await safeAnswerCb(ctx);
   if (!data) return;
 
-  const role = getRole(ctx);
+  const role = getEffectiveRole(ctx);
 
   if (String(data).startsWith("SIMILAR_MORE:")) {
     const perfumeId = Number(String(data).split(":")[1] || 0);
@@ -303,23 +330,21 @@ bot.on("callback_query", async (ctx) => {
     return showHome(ctx);
   }
 
- if (data === ACTIONS.EXIT_PICK) {
-  try {
-    disableMode(ctx);
-  } catch {}
+  if (data === ACTIONS.EXIT_PICK) {
+    try {
+      disableMode(ctx);
+    } catch {}
 
-  const role = getRole(ctx);
+    if (role === "admin") {
+      return ctx.reply("✅ Режим підбору вимкнено.", adminMenuKeyboard());
+    }
 
-  if (role === "admin") {
-    return ctx.reply("✅ Режим підбору вимкнено.", adminMenuKeyboard());
+    if (role === "user") {
+      return ctx.reply("✅ Режим підбору вимкнено.", userMenuKeyboard());
+    }
+
+    return ctx.reply("✅ Режим підбору вимкнено.");
   }
-
-  if (role === "user") {
-    return ctx.reply("✅ Режим підбору вимкнено.", userMenuKeyboard());
-  }
-
-  return ctx.reply("✅ Режим підбору вимкнено.");
-}
 
   if (String(data).startsWith("ADMIN_")) {
     if (role !== "admin") {
@@ -357,7 +382,10 @@ bot.on("callback_query", async (ctx) => {
 /* =========================
    Launch
 ========================= */
-bot.launch().then(() => console.log("Bot started"));
+bot.launch().then(() => {
+  console.log("Bot started");
+  console.log("SUPER_ADMIN_TG_ID =", SUPER_ADMIN_TG_ID);
+});
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
