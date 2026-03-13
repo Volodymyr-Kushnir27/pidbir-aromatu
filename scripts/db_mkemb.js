@@ -1,7 +1,10 @@
 require("dotenv").config();
 const Database = require("better-sqlite3");
 
-const DB_PATH = process.env.DB_PATH || "./data/perfumes_filtered.sqlite";
+const DB_PATH =
+  process.env.CATALOG_DB_PATH ||
+  process.env.DB_PATH ||
+  "/var/data/perfumes.sqlite";
 const db = new Database(DB_PATH);
 
 db.exec(`

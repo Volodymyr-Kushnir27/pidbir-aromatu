@@ -367,8 +367,9 @@ function buildMatchDebug(row, expanded) {
 /* =========================
    Main search
 ========================= */
+console.log("PROFILE GENDER:", profile.gender);
 
-function findCandidates(searchProfile, limit = 40) {
+function findCandidates(searchProfile, limit = 50) {
   const rows = getAllPerfumes();
 
   const scored = rows
@@ -389,5 +390,13 @@ function findCandidates(searchProfile, limit = 40) {
 
   return scored;
 }
+
+console.log(
+  candidates.slice(0, 10).map(x => ({
+    name: x.name,
+    gender: x.gender,
+    score: x.match_score
+  }))
+);
 
 module.exports = { findCandidates };
