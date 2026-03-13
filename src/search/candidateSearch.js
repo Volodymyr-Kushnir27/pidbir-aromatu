@@ -368,7 +368,7 @@ function buildMatchDebug(row, expanded) {
    Main search
 ========================= */
 
-function findCandidates(searchProfile, limit = 50) {
+function findCandidates(searchProfile, limit = 40) {
   const rows = getAllPerfumes();
 
   const scored = rows

@@ -38,28 +38,25 @@ function normalizeGenderValue(value) {
   return "unknown";
 }
 
-function getGenderPriority(requestedGender, itemGender) {
+function getGenderBucket(requestedGender, itemGender) {
   const req = normalizeGenderValue(requestedGender);
   const item = normalizeGenderValue(itemGender);
 
   if (req === "female") {
     if (item === "female") return 0;
     if (item === "unisex") return 1;
-    if (item === "unknown") return 2;
-    if (item === "male") return 3;
+    return 2;
   }
 
   if (req === "male") {
     if (item === "male") return 0;
     if (item === "unisex") return 1;
-    if (item === "unknown") return 2;
-    if (item === "female") return 3;
+    return 2;
   }
 
   if (req === "unisex") {
     if (item === "unisex") return 0;
-    if (item === "unknown") return 1;
-    return 2;
+    return 1;
   }
 
   return 0;
@@ -84,32 +81,29 @@ function rerankTopK(
     if (seen.has(key)) continue;
 
     const itemName = norm(item.name || "");
-    if (baseName && itemName && itemName === baseName) {
-      continue;
-    }
+    if (baseName && itemName && itemName === baseName) continue;
 
     seen.add(key);
 
     filtered.push({
       ...item,
-      _gender_priority: getGenderPriority(requestedGender, item.gender),
+      _gender_bucket: getGenderBucket(requestedGender, item.gender),
     });
   }
 
   filtered.sort((a, b) => {
-    if (a._gender_priority !== b._gender_priority) {
-      return a._gender_priority - b._gender_priority;
+    if (a._gender_bucket !== b._gender_bucket) {
+      return a._gender_bucket - b._gender_bucket;
     }
 
     const aScore = Number(a.match_score || 0);
     const bScore = Number(b.match_score || 0);
-
     return bScore - aScore;
   });
 
   return filtered
     .slice(offset, offset + topK)
-    .map(({ _gender_priority, ...item }) => item);
+    .map(({ _gender_bucket, ...item }) => item);
 }
 
 module.exports = { rerankTopK };
