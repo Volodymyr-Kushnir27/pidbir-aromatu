@@ -7,15 +7,26 @@ function must(name) {
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 if (!OPENAI_API_KEY) throw new Error("OPENAI_API_KEY missing");
 
+const DATA_DIR = process.env.DATA_DIR || "/var/data";
+
 module.exports = {
   BOT_TOKEN: must("BOT_TOKEN"),
   OPENAI_API_KEY,
 
   CHAT_MODEL: process.env.CHAT_MODEL || "gpt-4o-mini",
 
-  DB_PATH: process.env.DB_PATH || "./data/perfumes_filtered.sqlite",
-  ADMINS_PATH: process.env.ADMINS_PATH || "./data/admins.json",
-  USERS_PATH: process.env.USERS_PATH || "./data/users.json",
+  DB_PATH:
+    process.env.CATALOG_DB_PATH ||
+    process.env.DB_PATH ||
+    `${DATA_DIR}/perfumes.sqlite`,
+
+  ADMINS_PATH:
+    process.env.ADMINS_PATH ||
+    `${DATA_DIR}/admins.json`,
+
+  USERS_PATH:
+    process.env.USERS_PATH ||
+    `${DATA_DIR}/users.json`,
 
   ACTIONS: {
     ADD_USER: "ADMIN_ADD_USER",

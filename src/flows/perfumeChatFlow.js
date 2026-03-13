@@ -27,6 +27,9 @@ const modeState = new Map();
 //     originalText,
 //     analysis,
 //     searchProfile,
+//     requestedGender,
+//     primaryItems,
+//     fallbackItems,
 //     allItems,
 //     offset,
 //     sentIds
@@ -235,9 +238,7 @@ function detectRequestedGender(text, analysis, searchProfile) {
     return "male";
   }
 
-  if (
-    /\b(унісекс|унісексові|unisex)\b/i.test(t)
-  ) {
+  if (/\b(унісекс|унісексові|unisex)\b/i.test(t)) {
     return "unisex";
   }
 
@@ -253,12 +254,34 @@ function detectRequestedGender(text, analysis, searchProfile) {
     .map((x) => norm(x));
 
   for (const g of candidates) {
-    if (["female", "women", "woman", "жіночий", "жіночі", "женский", "женские"].includes(g)) {
+    if (
+      [
+        "female",
+        "women",
+        "woman",
+        "жіночий",
+        "жіночі",
+        "женский",
+        "женские",
+      ].includes(g)
+    ) {
       return "female";
     }
-    if (["male", "men", "man", "чоловічий", "чоловічі", "мужской", "мужские"].includes(g)) {
+
+    if (
+      [
+        "male",
+        "men",
+        "man",
+        "чоловічий",
+        "чоловічі",
+        "мужской",
+        "мужские",
+      ].includes(g)
+    ) {
       return "male";
     }
+
     if (["unisex", "унісекс"].includes(g)) {
       return "unisex";
     }
@@ -267,12 +290,10 @@ function detectRequestedGender(text, analysis, searchProfile) {
   return null;
 }
 
-function itemMatchesGender(item, requestedGender) {
-  if (!requestedGender) return true;
-
+function getItemGenderKind(item) {
   const g = norm(item?.gender);
 
-  if (!g) return true;
+  if (!g) return "unknown";
 
   const isFemale =
     g.includes("жі") ||
@@ -288,86 +309,108 @@ function itemMatchesGender(item, requestedGender) {
     g.includes("men") ||
     g.includes("man");
 
-  const isUnisex =
-    g.includes("уніс") ||
-    g.includes("unisex");
+  const isUnisex = g.includes("уніс") || g.includes("unisex");
 
-  if (requestedGender === "male") {
-    return isMale || isUnisex;
-  }
+  if (isFemale) return "female";
+  if (isMale) return "male";
+  if (isUnisex) return "unisex";
 
-  if (requestedGender === "female") {
-    return isFemale || isUnisex;
-  }
-
-  if (requestedGender === "unisex") {
-    return isUnisex;
-  }
-
-  return true;
+  return "unknown";
 }
 
-function genderPriorityScore(item, requestedGender) {
-  const g = norm(item?.gender);
+function splitByRequestedGender(items, requestedGender) {
+  const primary = [];
+  const fallback = [];
+  const other = [];
 
-  const isFemale =
-    g.includes("жі") ||
-    g.includes("жен") ||
-    g.includes("female") ||
-    g.includes("women") ||
-    g.includes("woman");
+  for (const item of items || []) {
+    const kind = getItemGenderKind(item);
 
-  const isMale =
-    g.includes("чол") ||
-    g.includes("муж") ||
-    g.includes("male") ||
-    g.includes("men") ||
-    g.includes("man");
+    if (requestedGender === "female") {
+      if (kind === "female") primary.push(item);
+      else if (kind === "unisex") fallback.push(item);
+      else other.push(item);
+      continue;
+    }
 
-  const isUnisex =
-    g.includes("уніс") ||
-    g.includes("unisex");
+    if (requestedGender === "male") {
+      if (kind === "male") primary.push(item);
+      else if (kind === "unisex") fallback.push(item);
+      else other.push(item);
+      continue;
+    }
 
-  if (requestedGender === "female") {
-    if (isFemale) return 3;
-    if (isUnisex) return 2;
-    return 0;
+    if (requestedGender === "unisex") {
+      if (kind === "unisex") primary.push(item);
+      else other.push(item);
+      continue;
+    }
+
+    primary.push(item);
   }
 
-  if (requestedGender === "male") {
-    if (isMale) return 3;
-    if (isUnisex) return 2;
-    return 0;
-  }
-
-  if (requestedGender === "unisex") {
-    if (isUnisex) return 3;
-    return 0;
-  }
-
-  return 1;
+  return {
+    primary: uniqById(primary),
+    fallback: uniqById(fallback),
+    other: uniqById(other),
+  };
 }
 
 function applyHardFilters(items, text, analysis, searchProfile) {
   const requestedGender = detectRequestedGender(text, analysis, searchProfile);
-
   let filtered = [...(items || [])];
 
-  if (requestedGender) {
-    filtered = filtered.filter((item) => itemMatchesGender(item, requestedGender));
-
-    // ВАЖЛИВО:
-    // жіночі/чоловічі мають бути вище за унісекс
-    filtered.sort((a, b) => {
-      const pa = genderPriorityScore(a, requestedGender);
-      const pb = genderPriorityScore(b, requestedGender);
-
-      if (pb !== pa) return pb - pa;
-      return 0;
-    });
+  if (!requestedGender) {
+    return {
+      requestedGender: null,
+      filtered: uniqById(filtered),
+      primaryItems: uniqById(filtered),
+      fallbackItems: [],
+      allItems: uniqById(filtered),
+    };
   }
 
-  return uniqById(filtered);
+  if (requestedGender === "female") {
+    filtered = filtered.filter((item) => {
+      const kind = getItemGenderKind(item);
+      return kind === "female" || kind === "unisex";
+    });
+  } else if (requestedGender === "male") {
+    filtered = filtered.filter((item) => {
+      const kind = getItemGenderKind(item);
+      return kind === "male" || kind === "unisex";
+    });
+  } else if (requestedGender === "unisex") {
+    filtered = filtered.filter((item) => getItemGenderKind(item) === "unisex");
+  }
+
+  const { primary, fallback } = splitByRequestedGender(filtered, requestedGender);
+
+  return {
+    requestedGender,
+    filtered: uniqById(filtered),
+    primaryItems: primary,
+    fallbackItems: fallback,
+    allItems: uniqById([...primary, ...fallback]),
+  };
+}
+
+function rebuildOrderedByGender(items, requestedGender) {
+  if (!requestedGender) {
+    return {
+      primaryItems: uniqById(items || []),
+      fallbackItems: [],
+      allItems: uniqById(items || []),
+    };
+  }
+
+  const { primary, fallback } = splitByRequestedGender(items, requestedGender);
+
+  return {
+    primaryItems: primary,
+    fallbackItems: fallback,
+    allItems: uniqById([...primary, ...fallback]),
+  };
 }
 
 function isFollowupForMore(text) {
@@ -375,7 +418,6 @@ function isFollowupForMore(text) {
 
   if (!t) return false;
 
-  // короткі команди
   if (
     t === "ще" ||
     t === "далі" ||
@@ -391,7 +433,6 @@ function isFollowupForMore(text) {
     return true;
   }
 
-  // більш вільні фрази
   if (
     /\b(ще|далі)\b/.test(t) &&
     /\b(аромат|аромати|варіант|варіанти|парфум|парфуми)\b/.test(t)
@@ -399,18 +440,11 @@ function isFollowupForMore(text) {
     return true;
   }
 
-  if (
-    /\b(дай|покажи|підбери|знайди)\b/.test(t) &&
-    /\b(ще|далі)\b/.test(t)
-  ) {
+  if (/\b(дай|покажи|підбери|знайди)\b/.test(t) && /\b(ще|далі)\b/.test(t)) {
     return true;
   }
 
-  // приклади: "підбери ще 5", "знайди ще 5 варіантів", "ще 3 аромати"
-  if (
-    /\bще\b/.test(t) &&
-    /\b\d{1,2}\b/.test(t)
-  ) {
+  if (/\bще\b/.test(t) && /\b\d{1,2}\b/.test(t)) {
     return true;
   }
 
@@ -419,7 +453,6 @@ function isFollowupForMore(text) {
 
 function parseBatchSize(text, fallback = 3) {
   const t = String(text || "").toLowerCase();
-
   const m = t.match(/\b(\d{1,2})\b/);
   if (!m) return fallback;
 
@@ -427,54 +460,6 @@ function parseBatchSize(text, fallback = 3) {
   if (!n || n < 1) return fallback;
 
   return Math.min(n, 10);
-}
-
-async function sendNextBatchFromState(ctx, saved, text = "") {
-  if (!saved || !Array.isArray(saved.allItems) || !saved.allItems.length) {
-    await ctx.reply("ℹ️ Немає збереженого попереднього пошуку. Напишіть новий запит.");
-    return true;
-  }
-
-  const batchSize = parseBatchSize(text, 3);
-  const sentIds = Array.isArray(saved.sentIds) ? saved.sentIds : [];
-  const remaining = saved.allItems.filter((x) => !sentIds.includes(x.id));
-
-  if (!remaining.length) {
-    await ctx.reply("✅ Це були всі варіанти за попереднім запитом.");
-    clearLastSearch(ctx);
-    return true;
-  }
-
-  await ctx.reply(`🔎 Показую ще ${Math.min(batchSize, remaining.length)} варіанти за попереднім запитом:`);
-
-  const batch = remaining.slice(0, batchSize);
-
-  for (const item of batch) {
-    const payload = buildPayloadWithExplanations(item);
-
-    await sendPerfumeCard(ctx, payload, {
-      notes: false,
-      season: false,
-    });
-  }
-
-  const nextSentIds = [...sentIds, ...batch.map((x) => x.id)];
-  const nextOffset = nextSentIds.length;
-
-  setLastSearch(ctx, {
-    ...saved,
-    sentIds: nextSentIds,
-    offset: nextOffset,
-  });
-
-  const left = saved.allItems.length - nextSentIds.length;
-  if (left > 0) {
-    await ctx.reply(`➡️ Ще залишилось ${left} варіантів. Напишіть: "ще"`);
-  } else {
-    await ctx.reply("✅ Це були всі варіанти за цим запитом.");
-  }
-
-  return true;
 }
 
 function reorderWithGptPriority(allItems, gptSelected = []) {
@@ -493,6 +478,87 @@ function reorderWithGptPriority(allItems, gptSelected = []) {
   return uniqById([...prioritized, ...rest]);
 }
 
+async function sendItemsBatch(ctx, items) {
+  for (const item of items) {
+    const payload = buildPayloadWithExplanations(item);
+
+    await sendPerfumeCard(ctx, payload, {
+      notes: false,
+      season: false,
+    });
+  }
+}
+
+async function sendNextBatchFromState(ctx, saved, text = "") {
+  if (!saved) {
+    await ctx.reply("ℹ️ Немає збереженого попереднього пошуку. Напишіть новий запит.");
+    return true;
+  }
+
+  const batchSize = parseBatchSize(text, 3);
+  const sentIds = Array.isArray(saved.sentIds) ? saved.sentIds : [];
+  const primaryItems = Array.isArray(saved.primaryItems) ? saved.primaryItems : [];
+  const fallbackItems = Array.isArray(saved.fallbackItems) ? saved.fallbackItems : [];
+  const orderedItems = uniqById([...primaryItems, ...fallbackItems]);
+
+  if (!orderedItems.length) {
+    await ctx.reply("ℹ️ Немає збережених результатів. Напишіть новий запит.");
+    clearLastSearch(ctx);
+    return true;
+  }
+
+  const remainingPrimary = primaryItems.filter((x) => !sentIds.includes(x.id));
+  const remainingFallback = fallbackItems.filter((x) => !sentIds.includes(x.id));
+
+  let sourceLabel = "ще варіанти";
+  let remaining = remainingPrimary;
+
+  if (!remainingPrimary.length && remainingFallback.length) {
+    remaining = remainingFallback;
+
+    if (saved.requestedGender === "female") {
+      sourceLabel = "ще варіанти, серед яких уже йдуть унісекс";
+    } else if (saved.requestedGender === "male") {
+      sourceLabel = "ще варіанти, серед яких уже йдуть унісекс";
+    } else {
+      sourceLabel = "ще варіанти";
+    }
+  }
+
+  if (!remaining.length) {
+    await ctx.reply("✅ Це були всі варіанти за попереднім запитом.");
+    clearLastSearch(ctx);
+    return true;
+  }
+
+  const batch = remaining.slice(0, batchSize);
+
+  await ctx.reply(
+    `🔎 Показую ${Math.min(batchSize, remaining.length)} ${sourceLabel}:`,
+  );
+
+  await sendItemsBatch(ctx, batch);
+
+  const nextSentIds = [...sentIds, ...batch.map((x) => x.id)];
+  const nextOffset = nextSentIds.length;
+
+  setLastSearch(ctx, {
+    ...saved,
+    sentIds: nextSentIds,
+    offset: nextOffset,
+  });
+
+  const left = orderedItems.length - nextSentIds.length;
+
+  if (left > 0) {
+    await ctx.reply(`➡️ Ще залишилось ${left} варіантів. Напишіть: "ще"`);
+  } else {
+    await ctx.reply("✅ Це були всі варіанти за цим запитом.");
+  }
+
+  return true;
+}
+
 /* =========================
    Main
 ========================= */
@@ -503,7 +569,6 @@ async function onUserText(ctx) {
   const text = String(ctx.message?.text || "").trim();
   if (!text) return true;
 
-  // 1. Спочатку перевіряємо продовження попереднього пошуку
   if (isFollowupForMore(text)) {
     const saved = getLastSearch(ctx);
     return sendNextBatchFromState(ctx, saved, text);
@@ -673,16 +738,17 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     6. HARD FILTERS (IMPORTANT)
+     6. HARD FILTERS + PRIMARY/FALLBACK
   ========================= */
-  candidates = applyHardFilters(candidates, text, analysis, searchProfile);
+  const filteredPack = applyHardFilters(candidates, text, analysis, searchProfile);
+
+  const requestedGender = filteredPack.requestedGender;
+  candidates = filteredPack.filtered;
 
   if (!candidates.length) {
-    const requestedGender = detectRequestedGender(text, analysis, searchProfile);
-
     if (requestedGender === "female") {
       await ctx.reply(
-        "❌ За запитом знайшлися результати, але після жорсткого фільтра не залишилось **жіночих** ароматів.\n\nУточніть ноти або стиль.",
+        "❌ За запитом знайшлися результати, але не залишилось **жіночих** ароматів. Уточніть ноти або стиль.",
         { parse_mode: "Markdown" },
       );
       return true;
@@ -690,7 +756,7 @@ async function onUserText(ctx) {
 
     if (requestedGender === "male") {
       await ctx.reply(
-        "❌ За запитом знайшлися результати, але після жорсткого фільтра не залишилось **чоловічих** ароматів.\n\nУточніть ноти або стиль.",
+        "❌ За запитом знайшлися результати, але не залишилось **чоловічих** ароматів. Уточніть ноти або стиль.",
         { parse_mode: "Markdown" },
       );
       return true;
@@ -698,7 +764,7 @@ async function onUserText(ctx) {
 
     if (requestedGender === "unisex") {
       await ctx.reply(
-        "❌ За запитом не знайшов відповідних **унісекс** ароматів.\n\nУточніть ноти або стиль.",
+        "❌ За запитом не знайшов відповідних **унісекс** ароматів. Уточніть ноти або стиль.",
         { parse_mode: "Markdown" },
       );
       return true;
@@ -709,7 +775,7 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     7. BUILD LONG LIST FOR CONTINUATION
+     7. RERANK
   ========================= */
   let allItems = rerankTopK(
     candidates,
@@ -718,8 +784,22 @@ async function onUserText(ctx) {
     50,
   );
 
+  let primaryItems = filteredPack.primaryItems;
+  let fallbackItems = filteredPack.fallbackItems;
+
+  if (requestedGender) {
+    const regroupedBeforeGpt = rebuildOrderedByGender(allItems, requestedGender);
+    primaryItems = regroupedBeforeGpt.primaryItems;
+    fallbackItems = regroupedBeforeGpt.fallbackItems;
+    allItems = regroupedBeforeGpt.allItems;
+  } else {
+    allItems = uniqById(allItems);
+    primaryItems = allItems;
+    fallbackItems = [];
+  }
+
   /* =========================
-     8. GPT RERANK + EXPLAIN (TOP priority, not only 3 forever)
+     8. GPT RERANK + EXPLAIN
   ========================= */
   try {
     const gptSelected = await rerankAndExplain({
@@ -733,6 +813,17 @@ async function onUserText(ctx) {
     if (Array.isArray(gptSelected) && gptSelected.length) {
       allItems = mergeGptReasons(allItems, gptSelected);
       allItems = reorderWithGptPriority(allItems, gptSelected);
+
+      if (requestedGender) {
+        const regroupedAfterGpt = rebuildOrderedByGender(allItems, requestedGender);
+        primaryItems = regroupedAfterGpt.primaryItems;
+        fallbackItems = regroupedAfterGpt.fallbackItems;
+        allItems = regroupedAfterGpt.allItems;
+      } else {
+        allItems = uniqById(allItems);
+        primaryItems = allItems;
+        fallbackItems = [];
+      }
     }
   } catch (e) {
     console.error("rerankAndExplain error:", e);
@@ -743,6 +834,16 @@ async function onUserText(ctx) {
   ========================= */
   allItems = attachReasons(allItems, searchProfile);
   allItems = uniqById(allItems);
+
+  if (requestedGender) {
+    const regroupedAfterReasons = rebuildOrderedByGender(allItems, requestedGender);
+    primaryItems = regroupedAfterReasons.primaryItems;
+    fallbackItems = regroupedAfterReasons.fallbackItems;
+    allItems = regroupedAfterReasons.allItems;
+  } else {
+    primaryItems = allItems;
+    fallbackItems = [];
+  }
 
   if (!allItems.length) {
     await ctx.reply("❌ Схожих варіантів не знайшов.");
@@ -756,6 +857,9 @@ async function onUserText(ctx) {
     originalText: text,
     analysis,
     searchProfile,
+    requestedGender,
+    primaryItems,
+    fallbackItems,
     allItems,
     offset: 0,
     sentIds: [],
@@ -764,18 +868,17 @@ async function onUserText(ctx) {
   /* =========================
      11. SEND FIRST BATCH
   ========================= */
-  await ctx.reply(`✨ Підібрав ${Math.min(3, allItems.length)} найбільш схожі варіанти:`);
+  const firstPool = primaryItems.length ? primaryItems : allItems;
+  const firstBatch = firstPool.slice(0, 3);
 
-  const firstBatch = allItems.slice(0, 3);
-
-  for (const item of firstBatch) {
-    const payload = buildPayloadWithExplanations(item);
-
-    await sendPerfumeCard(ctx, payload, {
-      notes: false,
-      season: false,
-    });
+  if (!firstBatch.length) {
+    await ctx.reply("❌ Не вдалося сформувати першу видачу.");
+    return true;
   }
+
+  await ctx.reply(`✨ Підібрав ${Math.min(3, firstBatch.length)} найбільш схожі варіанти:`);
+
+  await sendItemsBatch(ctx, firstBatch);
 
   const sentIds = firstBatch.map((x) => x.id);
   const offset = sentIds.length;
@@ -784,6 +887,9 @@ async function onUserText(ctx) {
     originalText: text,
     analysis,
     searchProfile,
+    requestedGender,
+    primaryItems,
+    fallbackItems,
     allItems,
     offset,
     sentIds,

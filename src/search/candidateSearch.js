@@ -7,128 +7,98 @@ const { norm, uniq } = require("../utils/text");
 ========================= */
 
 const NOTE_SYNONYMS = {
-  // watermelon
   "кавун": ["кавун", "арбуз", "watermelon", "melon", "water melon"],
   "арбуз": ["кавун", "арбуз", "watermelon", "melon", "water melon"],
   "watermelon": ["кавун", "арбуз", "watermelon", "melon", "water melon"],
 
-  // cherry
-  "вишня": ["вишня", "вишня", "вишнёвый", "cherry", "sweet cherry", "black cherry"],
+  "вишня": ["вишня", "вишнёвый", "cherry", "sweet cherry", "black cherry"],
   "вишнёвый": ["вишня", "вишнёвый", "cherry", "sweet cherry", "black cherry"],
-  "черешня": ["черешня", "вишня", "черешня", "cherry", "sweet cherry"],
+  "черешня": ["черешня", "вишня", "cherry", "sweet cherry"],
   "cherry": ["вишня", "вишнёвый", "черешня", "cherry", "sweet cherry", "black cherry"],
 
-  // strawberry
   "полуниця": ["полуниця", "клубника", "strawberry"],
   "клубника": ["полуниця", "клубника", "strawberry"],
   "strawberry": ["полуниця", "клубника", "strawberry"],
 
-  // raspberry
   "малина": ["малина", "raspberry"],
   "raspberry": ["малина", "raspberry"],
 
-  // peach
   "персик": ["персик", "peach"],
   "peach": ["персик", "peach"],
 
-  // apple
   "яблуко": ["яблуко", "яблоко", "apple", "green apple", "red apple"],
   "яблоко": ["яблуко", "яблоко", "apple", "green apple", "red apple"],
   "apple": ["яблуко", "яблоко", "apple", "green apple", "red apple"],
 
-  // pear
   "груша": ["груша", "pear"],
   "pear": ["груша", "pear"],
 
-  // lemon
   "лимон": ["лимон", "lemon"],
   "lemon": ["лимон", "lemon"],
 
-  // bergamot
   "бергамот": ["бергамот", "bergamot"],
   "bergamot": ["бергамот", "bergamot"],
 
-  // orange / mandarin
   "апельсин": ["апельсин", "orange", "mandarin", "tangerine"],
   "orange": ["апельсин", "orange", "mandarin", "tangerine"],
 
-  // vanilla
   "ваніль": ["ваніль", "ваниль", "vanilla"],
   "ваниль": ["ваніль", "ваниль", "vanilla"],
   "vanilla": ["ваніль", "ваниль", "vanilla"],
 
-  // musk
   "мускус": ["мускус", "musk", "white musk"],
   "musk": ["мускус", "musk", "white musk"],
 
-  // cedar
   "кедр": ["кедр", "cedar", "cedarwood"],
   "cedar": ["кедр", "cedar", "cedarwood"],
 
-  // sandalwood
   "сандал": ["сандал", "sandal", "sandalwood"],
   "sandal": ["сандал", "sandal", "sandalwood"],
   "sandalwood": ["сандал", "sandal", "sandalwood"],
 
-  // rose
   "троянда": ["троянда", "роза", "rose"],
   "роза": ["троянда", "роза", "rose"],
   "rose": ["троянда", "роза", "rose"],
 
-  // jasmine
   "жасмин": ["жасмин", "jasmine"],
   "jasmine": ["жасмин", "jasmine"],
 
-  // lavender
   "лаванда": ["лаванда", "lavender"],
   "lavender": ["лаванда", "lavender"],
 
-  // marine / aquatic
   "морський": ["морський", "морской", "marine", "aquatic", "oceanic", "sea", "ozonic"],
   "морской": ["морський", "морской", "marine", "aquatic", "oceanic", "sea", "ozonic"],
   "aquatic": ["морський", "морской", "marine", "aquatic", "oceanic", "sea", "ozonic"],
   "marine": ["морський", "морской", "marine", "aquatic", "oceanic", "sea", "ozonic"],
 
-  // ozonic
   "озоновий": ["озоновий", "озоновый", "ozonic", "fresh air"],
   "озоновый": ["озоновий", "озоновый", "ozonic", "fresh air"],
   "ozonic": ["озоновий", "озоновый", "ozonic", "fresh air"],
 
-  // leather
   "шкіра": ["шкіра", "кожа", "leather"],
   "кожа": ["шкіра", "кожа", "leather"],
   "leather": ["шкіра", "кожа", "leather"],
 
-  // tobacco
   "тютюн": ["тютюн", "табак", "tobacco"],
   "табак": ["тютюн", "табак", "tobacco"],
   "tobacco": ["тютюн", "табак", "tobacco"],
 
-  // coffee
   "кава": ["кава", "кофе", "coffee", "espresso"],
   "кофе": ["кава", "кофе", "coffee", "espresso"],
   "coffee": ["кава", "кофе", "coffee", "espresso"],
 
-  // rum / boozy
   "ром": ["ром", "rum", "boozy", "liquor"],
   "rum": ["ром", "rum", "boozy", "liquor"],
 
-  // coconut
   "кокос": ["кокос", "coconut"],
   "coconut": ["кокос", "coconut"],
 
-  // pineapple
   "ананас": ["ананас", "pineapple"],
   "pineapple": ["ананас", "pineapple"],
 
-  // currant / cassis
   "смородина": ["смородина", "black currant", "currant", "cassis"],
   "cassis": ["смородина", "black currant", "currant", "cassis"],
 };
-
-/* =========================
-   Style synonyms
-========================= */
 
 const STYLE_SYNONYMS = {
   "свіжий": ["свіжий", "свежий", "fresh", "clean", "crisp", "airy"],
@@ -176,15 +146,11 @@ const STYLE_SYNONYMS = {
   "зимний": ["зимовий", "зимний", "winter", "warm"],
 
   "вечірній": ["вечірній", "вечерний", "evening", "night", "date night"],
-  "вечерний": ["вечірній", "вечерний", "evening", "night", "date night"],
+  "вечерний": ["вечірній", "вечерный", "evening", "night", "date night"],
 
   "денний": ["денний", "дневной", "daytime", "office", "daily"],
   "дневной": ["денний", "дневной", "daytime", "office", "daily"],
 };
-
-/* =========================
-   Gender / season synonyms
-========================= */
 
 const GENDER_SYNONYMS = {
   male: [
@@ -224,10 +190,6 @@ const SEASON_SYNONYMS = {
   autumn: ["autumn", "fall", "осінь", "осінній", "осень", "осенний"],
   winter: ["winter", "зима", "зимовий", "зимний"],
 };
-
-/* =========================
-   Helpers
-========================= */
 
 function expandTerms(terms = [], dict = {}) {
   const out = [];
@@ -298,6 +260,35 @@ function countMatches(haystack, terms = []) {
   return count;
 }
 
+function normalizeGenderValue(value) {
+  const g = norm(String(value || ""));
+
+  if (!g) return "unknown";
+  if (
+    g.includes("жіноч") ||
+    g.includes("женск") ||
+    g.includes("female") ||
+    g.includes("women") ||
+    g.includes("woman")
+  ) return "female";
+
+  if (
+    g.includes("чолов") ||
+    g.includes("мужск") ||
+    g.includes("male") ||
+    g.includes("men") ||
+    g.includes("man")
+  ) return "male";
+
+  if (
+    g.includes("унісекс") ||
+    g.includes("унисекс") ||
+    g.includes("unisex")
+  ) return "unisex";
+
+  return "unknown";
+}
+
 function applyOntologyScore(row, profile) {
   const haystack = buildHaystack(row);
   let score = 0;
@@ -364,15 +355,27 @@ function buildMatchDebug(row, expanded) {
   };
 }
 
-/* =========================
-   Main search
-========================= */
-console.log("PROFILE GENDER:", profile.gender);
-
 function findCandidates(searchProfile, limit = 50) {
   const rows = getAllPerfumes();
 
-  const scored = rows
+  let filteredRows = rows;
+  const reqGender = normalizeGenderValue(searchProfile?.gender);
+
+  if (reqGender === "female") {
+    filteredRows = rows.filter((row) => {
+      const g = normalizeGenderValue(row.gender);
+      return g === "female" || g === "unisex";
+    });
+  }
+
+  if (reqGender === "male") {
+    filteredRows = rows.filter((row) => {
+      const g = normalizeGenderValue(row.gender);
+      return g === "male" || g === "unisex";
+    });
+  }
+
+  const scored = filteredRows
     .map((row) => {
       const baseScore = scoreCandidate(row, searchProfile);
       const expanded = applyOntologyScore(row, searchProfile);
@@ -390,13 +393,5 @@ function findCandidates(searchProfile, limit = 50) {
 
   return scored;
 }
-
-console.log(
-  candidates.slice(0, 10).map(x => ({
-    name: x.name,
-    gender: x.gender,
-    score: x.match_score
-  }))
-);
 
 module.exports = { findCandidates };
