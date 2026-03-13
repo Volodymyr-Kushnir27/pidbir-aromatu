@@ -10,8 +10,7 @@ function normalizeGenderValue(value) {
     g.includes("женск") ||
     g.includes("female") ||
     g.includes("women") ||
-    g.includes("woman") ||
-    g.includes("for women")
+    g.includes("woman")
   ) {
     return "female";
   }
@@ -21,8 +20,7 @@ function normalizeGenderValue(value) {
     g.includes("мужск") ||
     g.includes("male") ||
     g.includes("men") ||
-    g.includes("man") ||
-    g.includes("for men")
+    g.includes("man")
   ) {
     return "male";
   }
@@ -44,11 +42,6 @@ function getGenderPriority(requestedGender, itemGender) {
   const req = normalizeGenderValue(requestedGender);
   const item = normalizeGenderValue(itemGender);
 
-  // Якщо користувач хоче жіночий:
-  // 1) female
-  // 2) unisex
-  // 3) unknown
-  // 4) male
   if (req === "female") {
     if (item === "female") return 0;
     if (item === "unisex") return 1;
@@ -56,11 +49,6 @@ function getGenderPriority(requestedGender, itemGender) {
     if (item === "male") return 3;
   }
 
-  // Якщо користувач хоче чоловічий:
-  // 1) male
-  // 2) unisex
-  // 3) unknown
-  // 4) female
   if (req === "male") {
     if (item === "male") return 0;
     if (item === "unisex") return 1;
@@ -68,8 +56,6 @@ function getGenderPriority(requestedGender, itemGender) {
     if (item === "female") return 3;
   }
 
-  // Якщо запит unisex або gender не визначений —
-  // лишаємо майже початковий порядок, але unisex трохи вище
   if (req === "unisex") {
     if (item === "unisex") return 0;
     if (item === "unknown") return 1;
@@ -110,8 +96,6 @@ function rerankTopK(
     });
   }
 
-  // Спочатку сортуємо по пріоритету статі,
-  // потім по match_score, якщо він є
   filtered.sort((a, b) => {
     if (a._gender_priority !== b._gender_priority) {
       return a._gender_priority - b._gender_priority;
