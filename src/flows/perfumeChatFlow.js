@@ -294,204 +294,6 @@ function detectRequestedGender(text, analysis, searchProfile) {
   return null;
 }
 
-function getItemGenderKind(item) {
-  const g = norm(item?.gender);
-
-  if (!g) return "unknown";
-
-  const isFemale =
-    g.includes("жі") ||
-    g.includes("жен") ||
-    g.includes("female") ||
-    g.includes("women") ||
-    g.includes("woman");
-
-  const isMale =
-    g.includes("чол") ||
-    g.includes("муж") ||
-    g.includes("male") ||
-    g.includes("men") ||
-    g.includes("man");
-
-  const isUnisex =
-    g.includes("уніс") ||
-    g.includes("унис") ||
-    g.includes("unisex");
-
-  if (isFemale && isMale) return "unisex";
-  if (isUnisex) return "unisex";
-  if (isFemale) return "female";
-  if (isMale) return "male";
-
-  return "unknown";
-}
-
-function splitByRequestedGender(items, requestedGender) {
-  const primary = [];
-  const fallback = [];
-  const other = [];
-
-  for (const item of items || []) {
-    const kind = getItemGenderKind(item);
-
-    if (requestedGender === "female") {
-      if (kind === "female") primary.push(item);
-      else if (kind === "unisex") fallback.push(item);
-      else other.push(item);
-      continue;
-    }
-
-    if (requestedGender === "male") {
-      if (kind === "male") primary.push(item);
-      else if (kind === "unisex") fallback.push(item);
-      else other.push(item);
-      continue;
-    }
-
-    if (requestedGender === "unisex") {
-      if (kind === "unisex") primary.push(item);
-      else other.push(item);
-      continue;
-    }
-
-    primary.push(item);
-  }
-
-  return {
-    primary: uniqById(primary),
-    fallback: uniqById(fallback),
-    other: uniqById(other),
-  };
-}
-
-function applyHardFilters(items, text, analysis, searchProfile) {
-  const requestedGender = detectRequestedGender(text, analysis, searchProfile);
-  const all = uniqById(items || []);
-
-  if (!requestedGender) {
-    return {
-      requestedGender: null,
-      filtered: all,
-      primaryItems: all,
-      fallbackItems: [],
-      allItems: all,
-      usedFallback: false,
-    };
-  }
-
-  if (requestedGender === "female") {
-    const femaleItems = all.filter((item) => getItemGenderKind(item) === "female");
-    const unisexItems = all.filter((item) => getItemGenderKind(item) === "unisex");
-    const usedFallback = femaleItems.length === 0 && unisexItems.length > 0;
-    const active = femaleItems.length ? femaleItems : unisexItems;
-
-    return {
-      requestedGender,
-      filtered: active,
-      primaryItems: femaleItems,
-      fallbackItems: femaleItems.length ? unisexItems : unisexItems,
-      allItems: active,
-      usedFallback,
-    };
-  }
-
-  if (requestedGender === "male") {
-    const maleItems = all.filter((item) => getItemGenderKind(item) === "male");
-    const unisexItems = all.filter((item) => getItemGenderKind(item) === "unisex");
-    const usedFallback = maleItems.length === 0 && unisexItems.length > 0;
-    const active = maleItems.length ? maleItems : unisexItems;
-
-    return {
-      requestedGender,
-      filtered: active,
-      primaryItems: maleItems,
-      fallbackItems: maleItems.length ? unisexItems : unisexItems,
-      allItems: active,
-      usedFallback,
-    };
-  }
-
-  if (requestedGender === "unisex") {
-    const unisexItems = all.filter((item) => getItemGenderKind(item) === "unisex");
-
-    return {
-      requestedGender,
-      filtered: unisexItems,
-      primaryItems: unisexItems,
-      fallbackItems: [],
-      allItems: unisexItems,
-      usedFallback: false,
-    };
-  }
-
-  return {
-    requestedGender: null,
-    filtered: all,
-    primaryItems: all,
-    fallbackItems: [],
-    allItems: all,
-    usedFallback: false,
-  };
-}
-
-function rebuildOrderedByGender(items, requestedGender) {
-  if (!requestedGender) {
-    return {
-      primaryItems: uniqById(items || []),
-      fallbackItems: [],
-      allItems: uniqById(items || []),
-    };
-  }
-
-  const { primary, fallback } = splitByRequestedGender(items, requestedGender);
-
-  if (requestedGender === "female") {
-    if (primary.length) {
-      return {
-        primaryItems: primary,
-        fallbackItems: fallback,
-        allItems: uniqById(primary),
-      };
-    }
-
-    return {
-      primaryItems: [],
-      fallbackItems: fallback,
-      allItems: uniqById(fallback),
-    };
-  }
-
-  if (requestedGender === "male") {
-    if (primary.length) {
-      return {
-        primaryItems: primary,
-        fallbackItems: fallback,
-        allItems: uniqById(primary),
-      };
-    }
-
-    return {
-      primaryItems: [],
-      fallbackItems: fallback,
-      allItems: uniqById(fallback),
-    };
-  }
-
-  if (requestedGender === "unisex") {
-    return {
-      primaryItems: primary,
-      fallbackItems: [],
-      allItems: uniqById(primary),
-    };
-  }
-
-  return {
-    primaryItems: uniqById(items || []),
-    fallbackItems: [],
-    allItems: uniqById(items || []),
-  };
-}
-
 function isFollowupForMore(text) {
   const t = norm(text);
 
@@ -566,6 +368,130 @@ async function sendItemsBatch(ctx, items) {
       season: false,
     });
   }
+}
+
+function makeProfileWithGender(searchProfile, gender) {
+  return {
+    ...(searchProfile || {}),
+    gender,
+  };
+}
+
+function runFullDbSearch(searchProfile, gender, limit = 120) {
+  const profile = gender
+    ? makeProfileWithGender(searchProfile, gender)
+    : { ...(searchProfile || {}) };
+
+  return findCandidates(profile, limit);
+}
+
+function buildGenderPoolsFromFullDb(text, analysis, searchProfile) {
+  const requestedGender = detectRequestedGender(text, analysis, searchProfile);
+  const limit = SEARCH.LIMIT_CANDIDATES || 120;
+
+  if (!requestedGender) {
+    const allItems = runFullDbSearch(searchProfile, null, limit);
+
+    return {
+      requestedGender: null,
+      primaryItems: uniqById(allItems),
+      fallbackItems: [],
+      allItems: uniqById(allItems),
+      usedFallback: false,
+    };
+  }
+
+  if (requestedGender === "female") {
+    const femaleItems = runFullDbSearch(searchProfile, "female", limit);
+    const unisexItems = femaleItems.length
+      ? []
+      : runFullDbSearch(searchProfile, "unisex", limit);
+
+    return {
+      requestedGender,
+      primaryItems: uniqById(femaleItems),
+      fallbackItems: uniqById(unisexItems),
+      allItems: uniqById(femaleItems.length ? femaleItems : unisexItems),
+      usedFallback: femaleItems.length === 0 && unisexItems.length > 0,
+    };
+  }
+
+  if (requestedGender === "male") {
+    const maleItems = runFullDbSearch(searchProfile, "male", limit);
+    const unisexItems = maleItems.length
+      ? []
+      : runFullDbSearch(searchProfile, "unisex", limit);
+
+    return {
+      requestedGender,
+      primaryItems: uniqById(maleItems),
+      fallbackItems: uniqById(unisexItems),
+      allItems: uniqById(maleItems.length ? maleItems : unisexItems),
+      usedFallback: maleItems.length === 0 && unisexItems.length > 0,
+    };
+  }
+
+  if (requestedGender === "unisex") {
+    const unisexItems = runFullDbSearch(searchProfile, "unisex", limit);
+
+    return {
+      requestedGender,
+      primaryItems: uniqById(unisexItems),
+      fallbackItems: [],
+      allItems: uniqById(unisexItems),
+      usedFallback: false,
+    };
+  }
+
+  const allItems = runFullDbSearch(searchProfile, null, limit);
+
+  return {
+    requestedGender: null,
+    primaryItems: uniqById(allItems),
+    fallbackItems: [],
+    allItems: uniqById(allItems),
+    usedFallback: false,
+  };
+}
+
+async function enrichAndRankItems({
+  items,
+  text,
+  analysis,
+  searchProfile,
+}) {
+  let allItems = Array.isArray(items) ? uniqById(items) : [];
+
+  if (!allItems.length) return [];
+
+  allItems = rerankTopK(
+    allItems,
+    searchProfile,
+    analysis?.target_name,
+    50,
+  );
+
+  try {
+    const gptSelected = await rerankAndExplain({
+      userText: text,
+      analysis,
+      searchProfile,
+      candidates: allItems.slice(0, 10),
+      topK: Math.min(10, allItems.length),
+    });
+
+    if (Array.isArray(gptSelected) && gptSelected.length) {
+      allItems = mergeGptReasons(allItems, gptSelected);
+      allItems = reorderWithGptPriority(allItems, gptSelected);
+    }
+  } catch (e) {
+    console.error("rerankAndExplain error:", e);
+  }
+
+  allItems = attachReasons(allItems, searchProfile);
+  allItems = uniqById(allItems);
+
+  return allItems;
 }
 
 async function sendNextBatchFromState(ctx, saved, text = "") {
@@ -800,34 +726,48 @@ async function onUserText(ctx) {
   }
 
   /* =========================
-     5. DB SEARCH
+     5. FULL DB SEARCH POOLS
   ========================= */
-  let candidates = [];
+  let searchPools;
   try {
-    candidates = findCandidates(searchProfile, SEARCH.LIMIT_CANDIDATES || 120);
+    searchPools = buildGenderPoolsFromFullDb(text, analysis, searchProfile);
   } catch (e) {
-    console.error("findCandidates error:", e);
+    console.error("buildGenderPoolsFromFullDb error:", e);
     await ctx.reply("❌ Помилка пошуку в базі.");
     return true;
   }
 
-  if (!candidates.length) {
-    await ctx.reply(
-      "😔 У базі поки не знайшов вдалих збігів.\n\nМожете уточнити:\n• для кого аромат\n• які ноти\n• який стиль\n• на яку ситуацію\n• який шлейф або стійкість",
-    );
+  const requestedGender = searchPools.requestedGender;
+  const usedFallback = Boolean(searchPools.usedFallback);
+
+  let primaryItems = [];
+  let fallbackItems = [];
+
+  try {
+    primaryItems = await enrichAndRankItems({
+      items: searchPools.primaryItems,
+      text,
+      analysis,
+      searchProfile,
+    });
+
+    fallbackItems = await enrichAndRankItems({
+      items: searchPools.fallbackItems,
+      text,
+      analysis,
+      searchProfile,
+    });
+  } catch (e) {
+    console.error("enrichAndRankItems error:", e);
+    await ctx.reply("❌ Помилка фінального відбору.");
     return true;
   }
 
-  /* =========================
-     6. HARD FILTERS + PRIMARY/FALLBACK
-  ========================= */
-  const filteredPack = applyHardFilters(candidates, text, analysis, searchProfile);
+  const allItems = uniqById(
+    primaryItems.length ? primaryItems : fallbackItems,
+  );
 
-  const requestedGender = filteredPack.requestedGender;
-  const usedFallback = Boolean(filteredPack.usedFallback);
-  candidates = filteredPack.filtered;
-
-  if (!candidates.length) {
+  if (!allItems.length) {
     if (requestedGender === "female") {
       await ctx.reply(
         "❌ Не знайшов жіночих ароматів за цим запитом. Уточніть ноти або стиль.",
@@ -852,88 +792,14 @@ async function onUserText(ctx) {
       return true;
     }
 
-    await ctx.reply("❌ Після фільтрації відповідних ароматів не залишилось.");
+    await ctx.reply(
+      "😔 У базі поки не знайшов вдалих збігів.\n\nМожете уточнити:\n• для кого аромат\n• які ноти\n• який стиль\n• на яку ситуацію\n• який шлейф або стійкість",
+    );
     return true;
   }
 
   /* =========================
-     7. RERANK
-  ========================= */
-  let allItems = rerankTopK(
-    candidates,
-    searchProfile,
-    analysis.target_name,
-    50,
-  );
-
-  let primaryItems = filteredPack.primaryItems;
-  let fallbackItems = filteredPack.fallbackItems;
-
-  if (requestedGender) {
-    const regroupedBeforeGpt = rebuildOrderedByGender(allItems, requestedGender);
-    primaryItems = regroupedBeforeGpt.primaryItems;
-    fallbackItems = regroupedBeforeGpt.fallbackItems;
-    allItems = regroupedBeforeGpt.allItems;
-  } else {
-    allItems = uniqById(allItems);
-    primaryItems = allItems;
-    fallbackItems = [];
-  }
-
-  /* =========================
-     8. GPT RERANK + EXPLAIN
-  ========================= */
-  try {
-    const gptSelected = await rerankAndExplain({
-      userText: text,
-      analysis,
-      searchProfile,
-      candidates: candidates.slice(0, 10),
-      topK: Math.min(10, candidates.length),
-    });
-
-    if (Array.isArray(gptSelected) && gptSelected.length) {
-      allItems = mergeGptReasons(allItems, gptSelected);
-      allItems = reorderWithGptPriority(allItems, gptSelected);
-
-      if (requestedGender) {
-        const regroupedAfterGpt = rebuildOrderedByGender(allItems, requestedGender);
-        primaryItems = regroupedAfterGpt.primaryItems;
-        fallbackItems = regroupedAfterGpt.fallbackItems;
-        allItems = regroupedAfterGpt.allItems;
-      } else {
-        allItems = uniqById(allItems);
-        primaryItems = allItems;
-        fallbackItems = [];
-      }
-    }
-  } catch (e) {
-    console.error("rerankAndExplain error:", e);
-  }
-
-  /* =========================
-     9. LOCAL REASONS
-  ========================= */
-  allItems = attachReasons(allItems, searchProfile);
-  allItems = uniqById(allItems);
-
-  if (requestedGender) {
-    const regroupedAfterReasons = rebuildOrderedByGender(allItems, requestedGender);
-    primaryItems = regroupedAfterReasons.primaryItems;
-    fallbackItems = regroupedAfterReasons.fallbackItems;
-    allItems = regroupedAfterReasons.allItems;
-  } else {
-    primaryItems = allItems;
-    fallbackItems = [];
-  }
-
-  if (!allItems.length) {
-    await ctx.reply("❌ Схожих варіантів не знайшов.");
-    return true;
-  }
-
-  /* =========================
-     10. SAVE SEARCH STATE
+     6. SAVE SEARCH STATE
   ========================= */
   setLastSearch(ctx, {
     originalText: text,
@@ -949,7 +815,7 @@ async function onUserText(ctx) {
   });
 
   /* =========================
-     11. SEND FIRST BATCH
+     7. SEND FIRST BATCH
   ========================= */
   const firstPool = primaryItems.length ? primaryItems : fallbackItems;
   const firstBatch = firstPool.slice(0, 3);
