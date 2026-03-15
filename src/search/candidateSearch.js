@@ -463,7 +463,7 @@ function findCandidates(searchProfile = {}, limit = 50) {
         _debug: buildMatchDebug(row, expanded),
       };
     })
-    .filter((row) => row.match_score > 0)
+    .filter((row) => row.match_score >= 0)
     .sort((a, b) => {
       const aScore = Number(a.match_score || 0);
       const bScore = Number(b.match_score || 0);
