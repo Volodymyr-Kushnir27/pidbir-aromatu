@@ -427,29 +427,6 @@ function buildMatchDebug(row, expanded) {
   };
 }
 
-function getGenderPriorityBucket(rowGender, requestedGender) {
-  if (!requestedGender || requestedGender === "unknown") return 0;
-
-  if (requestedGender === "female") {
-    if (rowGender === "female") return 0;
-    if (rowGender === "unisex") return 1;
-    return 2;
-  }
-
-  if (requestedGender === "male") {
-    if (rowGender === "male") return 0;
-    if (rowGender === "unisex") return 1;
-    return 2;
-  }
-
-  if (requestedGender === "unisex") {
-    if (rowGender === "unisex") return 0;
-    return 1;
-  }
-
-  return 0;
-}
-
 function findCandidates(searchProfile = {}, limit = 50) {
   const rows = getAllPerfumes();
   const ontology = buildOntologyContext(searchProfile);
@@ -458,25 +435,24 @@ function findCandidates(searchProfile = {}, limit = 50) {
   let filteredRows = rows;
 
   if (reqGender === "female") {
-  filteredRows = rows.filter((row) => {
-    const g = normalizeGenderValue(row.gender);
-    return g === "female";
-  });
-} else if (reqGender === "male") {
-  filteredRows = rows.filter((row) => {
-    const g = normalizeGenderValue(row.gender);
-    return g === "male";
-  });
-} else if (reqGender === "unisex") {
-  filteredRows = rows.filter((row) => {
-    const g = normalizeGenderValue(row.gender);
-    return g === "unisex";
-  });
-}
+    filteredRows = rows.filter((row) => {
+      const g = normalizeGenderValue(row.gender);
+      return g === "female";
+    });
+  } else if (reqGender === "male") {
+    filteredRows = rows.filter((row) => {
+      const g = normalizeGenderValue(row.gender);
+      return g === "male";
+    });
+  } else if (reqGender === "unisex") {
+    filteredRows = rows.filter((row) => {
+      const g = normalizeGenderValue(row.gender);
+      return g === "unisex";
+    });
+  }
 
   const scored = filteredRows
     .map((row) => {
-      const rowGender = normalizeGenderValue(row.gender);
       const baseScore = scoreCandidate(row, searchProfile);
       const expanded = applyOntologyScore(row, ontology);
       const total = baseScore + expanded.score;
@@ -484,19 +460,16 @@ function findCandidates(searchProfile = {}, limit = 50) {
       return {
         ...row,
         match_score: total,
-        _gender_bucket: getGenderPriorityBucket(rowGender, reqGender),
         _debug: buildMatchDebug(row, expanded),
       };
     })
     .filter((row) => row.match_score > 0)
     .sort((a, b) => {
-      if (a._gender_bucket !== b._gender_bucket) {
-        return a._gender_bucket - b._gender_bucket;
-      }
-      return b.match_score - a.match_score;
+      const aScore = Number(a.match_score || 0);
+      const bScore = Number(b.match_score || 0);
+      return bScore - aScore;
     })
-    .slice(0, limit)
-    .map(({ _gender_bucket, ...row }) => row);
+    .slice(0, limit);
 
   return scored;
 }

@@ -32,7 +32,8 @@ const modeState = new Map();
 //     fallbackItems,
 //     allItems,
 //     offset,
-//     sentIds
+//     sentIds,
+//     usedFallback
 //   }
 // }
 
@@ -92,6 +93,9 @@ function clearLastSearch(ctx) {
   });
 }
 
+/* =========================
+   Public
+========================= */
 async function onUserPickAction(ctx) {
   setMode(ctx, "pick");
   clearLastSearch(ctx);
@@ -120,9 +124,9 @@ function uniqById(items) {
 }
 
 function mergeGptReasons(items, gptSelected = []) {
-  const byId = new Map(gptSelected.map((x) => [Number(x.id), x]));
+  const byId = new Map((gptSelected || []).map((x) => [Number(x.id), x]));
 
-  return items.map((item) => {
+  return (items || []).map((item) => {
     const hit = byId.get(Number(item.id));
     if (!hit) return item;
 
@@ -309,12 +313,15 @@ function getItemGenderKind(item) {
     g.includes("men") ||
     g.includes("man");
 
-  const isUnisex = g.includes("уніс") || g.includes("unisex");
+  const isUnisex =
+    g.includes("уніс") ||
+    g.includes("унис") ||
+    g.includes("unisex");
 
   if (isFemale && isMale) return "unisex";
+  if (isUnisex) return "unisex";
   if (isFemale) return "female";
   if (isMale) return "male";
-  if (isUnisex) return "unisex";
 
   return "unknown";
 }
@@ -368,38 +375,39 @@ function applyHardFilters(items, text, analysis, searchProfile) {
       primaryItems: all,
       fallbackItems: [],
       allItems: all,
+      usedFallback: false,
     };
   }
 
   if (requestedGender === "female") {
     const femaleItems = all.filter((item) => getItemGenderKind(item) === "female");
     const unisexItems = all.filter((item) => getItemGenderKind(item) === "unisex");
-
-    const primaryItems = femaleItems;
-    const fallbackItems = femaleItems.length ? [] : unisexItems;
+    const usedFallback = femaleItems.length === 0 && unisexItems.length > 0;
+    const active = femaleItems.length ? femaleItems : unisexItems;
 
     return {
       requestedGender,
-      filtered: femaleItems.length ? femaleItems : unisexItems,
-      primaryItems,
-      fallbackItems,
-      allItems: femaleItems.length ? femaleItems : unisexItems,
+      filtered: active,
+      primaryItems: femaleItems,
+      fallbackItems: femaleItems.length ? unisexItems : unisexItems,
+      allItems: active,
+      usedFallback,
     };
   }
 
   if (requestedGender === "male") {
     const maleItems = all.filter((item) => getItemGenderKind(item) === "male");
     const unisexItems = all.filter((item) => getItemGenderKind(item) === "unisex");
-
-    const primaryItems = maleItems;
-    const fallbackItems = maleItems.length ? [] : unisexItems;
+    const usedFallback = maleItems.length === 0 && unisexItems.length > 0;
+    const active = maleItems.length ? maleItems : unisexItems;
 
     return {
       requestedGender,
-      filtered: maleItems.length ? maleItems : unisexItems,
-      primaryItems,
-      fallbackItems,
-      allItems: maleItems.length ? maleItems : unisexItems,
+      filtered: active,
+      primaryItems: maleItems,
+      fallbackItems: maleItems.length ? unisexItems : unisexItems,
+      allItems: active,
+      usedFallback,
     };
   }
 
@@ -412,6 +420,7 @@ function applyHardFilters(items, text, analysis, searchProfile) {
       primaryItems: unisexItems,
       fallbackItems: [],
       allItems: unisexItems,
+      usedFallback: false,
     };
   }
 
@@ -421,6 +430,7 @@ function applyHardFilters(items, text, analysis, searchProfile) {
     primaryItems: all,
     fallbackItems: [],
     allItems: all,
+    usedFallback: false,
   };
 }
 
@@ -435,10 +445,50 @@ function rebuildOrderedByGender(items, requestedGender) {
 
   const { primary, fallback } = splitByRequestedGender(items, requestedGender);
 
+  if (requestedGender === "female") {
+    if (primary.length) {
+      return {
+        primaryItems: primary,
+        fallbackItems: fallback,
+        allItems: uniqById(primary),
+      };
+    }
+
+    return {
+      primaryItems: [],
+      fallbackItems: fallback,
+      allItems: uniqById(fallback),
+    };
+  }
+
+  if (requestedGender === "male") {
+    if (primary.length) {
+      return {
+        primaryItems: primary,
+        fallbackItems: fallback,
+        allItems: uniqById(primary),
+      };
+    }
+
+    return {
+      primaryItems: [],
+      fallbackItems: fallback,
+      allItems: uniqById(fallback),
+    };
+  }
+
+  if (requestedGender === "unisex") {
+    return {
+      primaryItems: primary,
+      fallbackItems: [],
+      allItems: uniqById(primary),
+    };
+  }
+
   return {
-    primaryItems: primary,
-    fallbackItems: fallback,
-    allItems: uniqById([...primary, ...fallback]),
+    primaryItems: uniqById(items || []),
+    fallbackItems: [],
+    allItems: uniqById(items || []),
   };
 }
 
@@ -528,7 +578,9 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
   const sentIds = Array.isArray(saved.sentIds) ? saved.sentIds : [];
   const primaryItems = Array.isArray(saved.primaryItems) ? saved.primaryItems : [];
   const fallbackItems = Array.isArray(saved.fallbackItems) ? saved.fallbackItems : [];
-  const orderedItems = uniqById([...primaryItems, ...fallbackItems]);
+  const orderedItems = primaryItems.length
+    ? uniqById(primaryItems)
+    : uniqById(fallbackItems);
 
   if (!orderedItems.length) {
     await ctx.reply("ℹ️ Немає збережених результатів. Напишіть новий запит.");
@@ -540,17 +592,17 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
   const remainingFallback = fallbackItems.filter((x) => !sentIds.includes(x.id));
 
   let sourceLabel = "ще варіанти";
-  let remaining = remainingPrimary;
+  let remaining = [];
 
-  if (!remainingPrimary.length && remainingFallback.length) {
+  if (remainingPrimary.length) {
+    remaining = remainingPrimary;
+  } else if (!primaryItems.length && remainingFallback.length) {
     remaining = remainingFallback;
 
     if (saved.requestedGender === "female") {
-      sourceLabel = "ще варіанти, серед яких уже йдуть унісекс";
+      sourceLabel = "ще варіанти унісекс, бо жіночих не знайшлося";
     } else if (saved.requestedGender === "male") {
-      sourceLabel = "ще варіанти, серед яких уже йдуть унісекс";
-    } else {
-      sourceLabel = "ще варіанти";
+      sourceLabel = "ще варіанти унісекс, бо чоловічих не знайшлося";
     }
   }
 
@@ -772,12 +824,13 @@ async function onUserText(ctx) {
   const filteredPack = applyHardFilters(candidates, text, analysis, searchProfile);
 
   const requestedGender = filteredPack.requestedGender;
+  const usedFallback = Boolean(filteredPack.usedFallback);
   candidates = filteredPack.filtered;
 
   if (!candidates.length) {
     if (requestedGender === "female") {
       await ctx.reply(
-        "❌ За запитом знайшлися результати, але не залишилось **жіночих** ароматів. Уточніть ноти або стиль.",
+        "❌ Не знайшов жіночих ароматів за цим запитом. Уточніть ноти або стиль.",
         { parse_mode: "Markdown" },
       );
       return true;
@@ -785,7 +838,7 @@ async function onUserText(ctx) {
 
     if (requestedGender === "male") {
       await ctx.reply(
-        "❌ За запитом знайшлися результати, але не залишилось **чоловічих** ароматів. Уточніть ноти або стиль.",
+        "❌ Не знайшов чоловічих ароматів за цим запитом. Уточніть ноти або стиль.",
         { parse_mode: "Markdown" },
       );
       return true;
@@ -892,17 +945,24 @@ async function onUserText(ctx) {
     allItems,
     offset: 0,
     sentIds: [],
+    usedFallback,
   });
 
   /* =========================
      11. SEND FIRST BATCH
   ========================= */
-  const firstPool = primaryItems.length ? primaryItems : allItems;
+  const firstPool = primaryItems.length ? primaryItems : fallbackItems;
   const firstBatch = firstPool.slice(0, 3);
 
   if (!firstBatch.length) {
     await ctx.reply("❌ Не вдалося сформувати першу видачу.");
     return true;
+  }
+
+  if (usedFallback && requestedGender === "female") {
+    await ctx.reply("ℹ️ Жіночих не знайшов, тому показую найближчі варіанти унісекс.");
+  } else if (usedFallback && requestedGender === "male") {
+    await ctx.reply("ℹ️ Чоловічих не знайшов, тому показую найближчі варіанти унісекс.");
   }
 
   await ctx.reply(`✨ Підібрав ${Math.min(3, firstBatch.length)} найбільш схожі варіанти:`);
@@ -922,6 +982,7 @@ async function onUserText(ctx) {
     allItems,
     offset,
     sentIds,
+    usedFallback,
   });
 
   const left = allItems.length - offset;
