@@ -311,6 +311,7 @@ function getItemGenderKind(item) {
 
   const isUnisex = g.includes("уніс") || g.includes("unisex");
 
+  if (isFemale && isMale) return "unisex";
   if (isFemale) return "female";
   if (isMale) return "male";
   if (isUnisex) return "unisex";

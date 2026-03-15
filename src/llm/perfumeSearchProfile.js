@@ -35,6 +35,7 @@ async function buildSearchProfile(analysis) {
 
 Правила:
 - Якщо користувач шукає ноту українською або російською, додай англійські відповідники.
+- Якщо в analysis є style/search_terms, витягни з них конкретні ноти/акорди (фрукти, цитруси, квіти, деревні, мускус тощо),а не загальні фрази.
 - Якщо користувач шукає стиль, додай пов’язані style-tags.
 - Якщо є ситуація використання — заповни best_for.
 - Якщо є побажання по шлейфу — заповни projection.
@@ -42,6 +43,7 @@ async function buildSearchProfile(analysis) {
 - Якщо є побажання по образу — заповни image_style.
 - Якщо є вік / стиль віку — age_group.
 - search-profile має бути максимально корисним для пошуку та rerank.
+- Заповнюй raw_terms короткими конкретними токенами запиту (ноти/акорди/дескриптори), без "води".
 `;
 
   const user = `Ось perfume analysis:\n${JSON.stringify(analysis, null, 2)}`;
@@ -49,7 +51,7 @@ async function buildSearchProfile(analysis) {
   const json = await chatJSON({
     system,
     user,
-    temperature: 0.2,
+    temperature: 0.1,
   });
 
   return (
