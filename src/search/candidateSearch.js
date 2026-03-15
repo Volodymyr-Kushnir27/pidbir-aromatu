@@ -458,21 +458,21 @@ function findCandidates(searchProfile = {}, limit = 50) {
   let filteredRows = rows;
 
   if (reqGender === "female") {
-    filteredRows = rows.filter((row) => {
-      const g = normalizeGenderValue(row.gender);
-      return g === "female" || g === "unisex";
-    });
-  } else if (reqGender === "male") {
-    filteredRows = rows.filter((row) => {
-      const g = normalizeGenderValue(row.gender);
-      return g === "male" || g === "unisex";
-    });
-  } else if (reqGender === "unisex") {
-    filteredRows = rows.filter((row) => {
-      const g = normalizeGenderValue(row.gender);
-      return g === "unisex";
-    });
-  }
+  filteredRows = rows.filter((row) => {
+    const g = normalizeGenderValue(row.gender);
+    return g === "female";
+  });
+} else if (reqGender === "male") {
+  filteredRows = rows.filter((row) => {
+    const g = normalizeGenderValue(row.gender);
+    return g === "male";
+  });
+} else if (reqGender === "unisex") {
+  filteredRows = rows.filter((row) => {
+    const g = normalizeGenderValue(row.gender);
+    return g === "unisex";
+  });
+}
 
   const scored = filteredRows
     .map((row) => {

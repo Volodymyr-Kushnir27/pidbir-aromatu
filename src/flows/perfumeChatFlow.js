@@ -359,40 +359,68 @@ function splitByRequestedGender(items, requestedGender) {
 
 function applyHardFilters(items, text, analysis, searchProfile) {
   const requestedGender = detectRequestedGender(text, analysis, searchProfile);
-  let filtered = [...(items || [])];
+  const all = uniqById(items || []);
 
   if (!requestedGender) {
     return {
       requestedGender: null,
-      filtered: uniqById(filtered),
-      primaryItems: uniqById(filtered),
+      filtered: all,
+      primaryItems: all,
       fallbackItems: [],
-      allItems: uniqById(filtered),
+      allItems: all,
     };
   }
 
   if (requestedGender === "female") {
-    filtered = filtered.filter((item) => {
-      const kind = getItemGenderKind(item);
-      return kind === "female" || kind === "unisex";
-    });
-  } else if (requestedGender === "male") {
-    filtered = filtered.filter((item) => {
-      const kind = getItemGenderKind(item);
-      return kind === "male" || kind === "unisex";
-    });
-  } else if (requestedGender === "unisex") {
-    filtered = filtered.filter((item) => getItemGenderKind(item) === "unisex");
+    const femaleItems = all.filter((item) => getItemGenderKind(item) === "female");
+    const unisexItems = all.filter((item) => getItemGenderKind(item) === "unisex");
+
+    const primaryItems = femaleItems;
+    const fallbackItems = femaleItems.length ? [] : unisexItems;
+
+    return {
+      requestedGender,
+      filtered: femaleItems.length ? femaleItems : unisexItems,
+      primaryItems,
+      fallbackItems,
+      allItems: femaleItems.length ? femaleItems : unisexItems,
+    };
   }
 
-  const { primary, fallback } = splitByRequestedGender(filtered, requestedGender);
+  if (requestedGender === "male") {
+    const maleItems = all.filter((item) => getItemGenderKind(item) === "male");
+    const unisexItems = all.filter((item) => getItemGenderKind(item) === "unisex");
+
+    const primaryItems = maleItems;
+    const fallbackItems = maleItems.length ? [] : unisexItems;
+
+    return {
+      requestedGender,
+      filtered: maleItems.length ? maleItems : unisexItems,
+      primaryItems,
+      fallbackItems,
+      allItems: maleItems.length ? maleItems : unisexItems,
+    };
+  }
+
+  if (requestedGender === "unisex") {
+    const unisexItems = all.filter((item) => getItemGenderKind(item) === "unisex");
+
+    return {
+      requestedGender,
+      filtered: unisexItems,
+      primaryItems: unisexItems,
+      fallbackItems: [],
+      allItems: unisexItems,
+    };
+  }
 
   return {
-    requestedGender,
-    filtered: uniqById(filtered),
-    primaryItems: primary,
-    fallbackItems: fallback,
-    allItems: uniqById([...primary, ...fallback]),
+    requestedGender: null,
+    filtered: all,
+    primaryItems: all,
+    fallbackItems: [],
+    allItems: all,
   };
 }
 
