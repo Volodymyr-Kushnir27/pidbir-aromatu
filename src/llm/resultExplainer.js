@@ -2,31 +2,39 @@ function uniq(arr = []) {
   return [...new Set((arr || []).filter(Boolean).map((x) => String(x).trim()))];
 }
 
+function hasWord(text, word) {
+  return new RegExp(`\\b${word}\\b`, "i").test(String(text || ""));
+}
+
 function toUaGender(gender) {
   const g = String(gender || "").toLowerCase();
 
   if (
-    g.includes("male") ||
-    g.includes("man") ||
-    g.includes("men") ||
-    g.includes("чолов") ||
-    g.includes("муж")
+    g.includes("unisex") ||
+    g.includes("унісекс") ||
+    g.includes("унисекс")
   ) {
-    return "чоловічий";
+    return "унісекс";
   }
 
   if (
-    g.includes("female") ||
-    g.includes("woman") ||
-    g.includes("women") ||
+    hasWord(g, "female") ||
+    hasWord(g, "woman") ||
+    hasWord(g, "women") ||
     g.includes("жіноч") ||
     g.includes("жен")
   ) {
     return "жіночий";
   }
 
-  if (g.includes("unisex") || g.includes("унісекс") || g.includes("унисекс")) {
-    return "унісекс";
+  if (
+    hasWord(g, "male") ||
+    hasWord(g, "man") ||
+    hasWord(g, "men") ||
+    g.includes("чолов") ||
+    g.includes("муж")
+  ) {
+    return "чоловічий";
   }
 
   return "";

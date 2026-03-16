@@ -1,31 +1,44 @@
 const { norm } = require("../utils/text");
 
+function hasWord(text, word) {
+  return new RegExp(`\\b${word}\\b`, "i").test(String(text || ""));
+}
+
 function normalizeGenderValue(value) {
   const g = norm(String(value || ""));
 
   if (!g) return "unknown";
 
-  if (
-    g.includes("жіноч") ||
-    g.includes("женск") ||
-    g.includes("female") ||
-    g.includes("women") ||
-    g.includes("woman")
-  ) return "female";
-
-  if (
-    g.includes("чолов") ||
-    g.includes("мужск") ||
-    g.includes("male") ||
-    g.includes("men") ||
-    g.includes("man")
-  ) return "male";
-
+  // 1. Спочатку unisex
   if (
     g.includes("унісекс") ||
     g.includes("унисекс") ||
-    g.includes("unisex")
-  ) return "unisex";
+    hasWord(g, "unisex")
+  ) {
+    return "unisex";
+  }
+
+  // 2. Потім female
+  if (
+    g.includes("жіноч") ||
+    g.includes("женск") ||
+    hasWord(g, "female") ||
+    hasWord(g, "women") ||
+    hasWord(g, "woman")
+  ) {
+    return "female";
+  }
+
+  // 3. Потім male
+  if (
+    g.includes("чолов") ||
+    g.includes("мужск") ||
+    hasWord(g, "male") ||
+    hasWord(g, "men") ||
+    hasWord(g, "man")
+  ) {
+    return "male";
+  }
 
   return "unknown";
 }
@@ -82,7 +95,12 @@ function rerankTopK(candidates, profile, targetName = "", topK = 3, offset = 0) 
 
     const aScore = Number(a.match_score || 0);
     const bScore = Number(b.match_score || 0);
-    return bScore - aScore;
+
+    if (aScore !== bScore) {
+      return bScore - aScore;
+    }
+
+    return Number(a.id || 0) - Number(b.id || 0);
   });
 
   return filtered
@@ -90,4 +108,8 @@ function rerankTopK(candidates, profile, targetName = "", topK = 3, offset = 0) 
     .map(({ _gender_bucket, ...item }) => item);
 }
 
-module.exports = { rerankTopK };
+module.exports = {
+  rerankTopK,
+  normalizeGenderValue,
+  getGenderBucket,
+};

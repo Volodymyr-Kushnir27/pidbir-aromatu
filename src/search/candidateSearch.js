@@ -240,6 +240,10 @@ const SEASON_SYNONYMS = {
   winter: ["winter", "зима", "зимовий", "зимний"],
 };
 
+function hasWord(text, word) {
+  return new RegExp(`\\b${word}\\b`, "i").test(String(text || ""));
+}
+
 function expandTerms(terms = [], dict = {}) {
   const out = [];
 
@@ -323,21 +327,21 @@ function normalizeGenderValue(value) {
   const hasUnisex =
     g.includes("унісекс") ||
     g.includes("унисекс") ||
-    g.includes("unisex");
+    hasWord(g, "unisex");
 
   const hasFemale =
     g.includes("жіноч") ||
     g.includes("женск") ||
-    g.includes("female") ||
-    g.includes("women") ||
-    g.includes("woman");
+    hasWord(g, "female") ||
+    hasWord(g, "women") ||
+    hasWord(g, "woman");
 
   const hasMale =
     g.includes("чолов") ||
     g.includes("мужск") ||
-    g.includes("male") ||
-    g.includes("men") ||
-    g.includes("man");
+    hasWord(g, "male") ||
+    hasWord(g, "men") ||
+    hasWord(g, "man");
 
   if (hasUnisex) return "unisex";
   if (hasFemale && hasMale) return "unisex";
@@ -427,29 +431,29 @@ function buildMatchDebug(row, expanded) {
   };
 }
 
+function filterRowsByRequestedGender(rows, requestedGender) {
+  const req = normalizeGenderValue(requestedGender);
+
+  if (req === "female") {
+    return rows.filter((row) => normalizeGenderValue(row.gender) === "female");
+  }
+
+  if (req === "male") {
+    return rows.filter((row) => normalizeGenderValue(row.gender) === "male");
+  }
+
+  if (req === "unisex") {
+    return rows.filter((row) => normalizeGenderValue(row.gender) === "unisex");
+  }
+
+  return rows;
+}
+
 function findCandidates(searchProfile = {}, limit = 50) {
   const rows = getAllPerfumes();
   const ontology = buildOntologyContext(searchProfile);
-  const reqGender = normalizeGenderValue(searchProfile.gender);
 
-  let filteredRows = rows;
-
-  if (reqGender === "female") {
-    filteredRows = rows.filter((row) => {
-      const g = normalizeGenderValue(row.gender);
-      return g === "female";
-    });
-  } else if (reqGender === "male") {
-    filteredRows = rows.filter((row) => {
-      const g = normalizeGenderValue(row.gender);
-      return g === "male";
-    });
-  } else if (reqGender === "unisex") {
-    filteredRows = rows.filter((row) => {
-      const g = normalizeGenderValue(row.gender);
-      return g === "unisex";
-    });
-  }
+  const filteredRows = filterRowsByRequestedGender(rows, searchProfile.gender);
 
   const scored = filteredRows
     .map((row) => {
@@ -462,6 +466,8 @@ function findCandidates(searchProfile = {}, limit = 50) {
         match_score: total,
         _debug: {
           ...buildMatchDebug(row, expanded),
+          normalized_item_gender: normalizeGenderValue(row.gender),
+          normalized_requested_gender: normalizeGenderValue(searchProfile.gender),
           baseScore,
           ontologyScore: expanded.score,
           totalScore: total,
@@ -471,11 +477,19 @@ function findCandidates(searchProfile = {}, limit = 50) {
     .sort((a, b) => {
       const aScore = Number(a.match_score || 0);
       const bScore = Number(b.match_score || 0);
-      return bScore - aScore;
+
+      if (aScore !== bScore) {
+        return bScore - aScore;
+      }
+
+      return Number(a.id || 0) - Number(b.id || 0);
     })
     .slice(0, limit);
 
   return scored;
 }
 
-module.exports = { findCandidates };
+module.exports = {
+  findCandidates,
+  normalizeGenderValue,
+};
