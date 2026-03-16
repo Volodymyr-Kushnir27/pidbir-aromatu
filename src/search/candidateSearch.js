@@ -200,7 +200,7 @@ const STYLE_SYNONYMS = {
   зимовий: ["зимовий", "зимний", "winter", "warm"],
   зимний: ["зимовий", "зимний", "winter", "warm"],
 
-  вечірній: ["вечірній", "вечерний", "evening", "night", "date night"],
+  вечірній: ["вечірній", "вечерный", "evening", "night", "date night"],
   вечерний: ["вечірній", "вечерный", "evening", "night", "date night"],
 
   денний: ["денний", "дневной", "daytime", "office", "daily"],
@@ -460,10 +460,14 @@ function findCandidates(searchProfile = {}, limit = 50) {
       return {
         ...row,
         match_score: total,
-        _debug: buildMatchDebug(row, expanded),
+        _debug: {
+          ...buildMatchDebug(row, expanded),
+          baseScore,
+          ontologyScore: expanded.score,
+          totalScore: total,
+        },
       };
     })
-    .filter((row) => row.match_score >= 0)
     .sort((a, b) => {
       const aScore = Number(a.match_score || 0);
       const bScore = Number(b.match_score || 0);

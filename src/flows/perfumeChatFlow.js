@@ -385,9 +385,9 @@ function runFullDbSearch(searchProfile, gender, limit = 120) {
   return findCandidates(profile, limit);
 }
 
-function buildGenderPoolsFromFullDb(text, analysis, searchProfile) {
+function buildGenderPoolsFromFullDb(text, analysis, searchProfile) {  
   const requestedGender = detectRequestedGender(text, analysis, searchProfile);
-  const limit = SEARCH.LIMIT_CANDIDATES || 120;
+  const limit = SEARCH.LIMIT_CANDIDATES || 100;
 
   if (!requestedGender) {
     const allItems = runFullDbSearch(searchProfile, null, limit);
