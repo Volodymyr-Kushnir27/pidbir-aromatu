@@ -360,14 +360,31 @@ function reorderWithGptPriority(allItems, gptSelected = []) {
 }
 
 async function sendItemsBatch(ctx, items) {
-  for (const item of items) {
-    const payload = buildPayloadWithExplanations(item);
+  const sent = [];
+  const failed = [];
 
-    await sendPerfumeCard(ctx, payload, {
-      notes: false,
-      season: false,
-    });
+  for (const item of items) {
+    try {
+      const payload = buildPayloadWithExplanations(item);
+
+      await sendPerfumeCard(ctx, payload, {
+        notes: false,
+        season: false,
+      });
+
+      sent.push(item);
+    } catch (e) {
+      console.error(
+        "sendItemsBatch item failed:",
+        item?.id,
+        item?.name,
+        e?.message || e,
+      );
+      failed.push(item);
+    }
   }
+
+  return { sent, failed };
 }
 
 function makeProfileWithGender(searchProfile, gender) {
@@ -538,16 +555,24 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
     return true;
   }
 
-  const batch = remaining.slice(0, batchSize);
+  const safeRemaining = remaining.filter((x) => !sentIds.includes(x.id));
+const batch = safeRemaining.slice(0, batchSize);
 
   await ctx.reply(
     `🔎 Показую ${Math.min(batchSize, remaining.length)} ${sourceLabel}:`,
   );
 
-  await sendItemsBatch(ctx, batch);
+ const { sent, failed } = await sendItemsBatch(ctx, batch);
 
-  const nextSentIds = [...sentIds, ...batch.map((x) => x.id)];
-  const nextOffset = nextSentIds.length;
+const nextSentIds = [...sentIds, ...sent.map((x) => x.id)];
+const nextOffset = nextSentIds.length;
+
+if (failed.length) {
+  console.error(
+    "Next batch failed items:",
+    failed.map((x) => ({ id: x.id, name: x.name })),
+  );
+}
 
   setLastSearch(ctx, {
     ...saved,
@@ -731,6 +756,22 @@ async function onUserText(ctx) {
   let searchPools;
   try {
     searchPools = buildGenderPoolsFromFullDb(text, analysis, searchProfile);
+    console.log("SEARCH DEBUG", {
+  userText: text,
+  requestedGender: searchPools?.requestedGender || null,
+  primaryCount: Array.isArray(searchPools?.primaryItems)
+    ? searchPools.primaryItems.length
+    : 0,
+  fallbackCount: Array.isArray(searchPools?.fallbackItems)
+    ? searchPools.fallbackItems.length
+    : 0,
+  allCount: Array.isArray(searchPools?.allItems)
+    ? searchPools.allItems.length
+    : 0,
+  analysisQueryType: analysis?.query_type || null,
+  searchProfileGender: searchProfile?.gender || null,
+  searchTerms: searchProfile?.search_terms || null,
+});
   } catch (e) {
     console.error("buildGenderPoolsFromFullDb error:", e);
     await ctx.reply("❌ Помилка пошуку в базі.");
@@ -833,10 +874,17 @@ async function onUserText(ctx) {
 
   await ctx.reply(`✨ Підібрав ${Math.min(3, firstBatch.length)} найбільш схожі варіанти:`);
 
-  await sendItemsBatch(ctx, firstBatch);
+const { sent, failed } = await sendItemsBatch(ctx, firstBatch);
 
-  const sentIds = firstBatch.map((x) => x.id);
-  const offset = sentIds.length;
+const sentIds = sent.map((x) => x.id);
+const offset = sentIds.length;
+
+if (failed.length) {
+  console.error(
+    "First batch failed items:",
+    failed.map((x) => ({ id: x.id, name: x.name })),
+  );
+}
 
   setLastSearch(ctx, {
     originalText: text,

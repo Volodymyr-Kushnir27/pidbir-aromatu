@@ -148,25 +148,21 @@ function decorateItem(item) {
 
 async function sendBatch(ctx, baseId, items, offset = 0, batchSize = 3) {
   const batch = items.slice(offset, offset + batchSize);
+  const sent = [];
 
   for (const item of batch) {
-    await sendPerfumeCard(ctx, decorateItem(item), {
-      notes: false,
-      season: false,
-    });
+    try {
+      await sendPerfumeCard(ctx, decorateItem(item), {
+        notes: false,
+        season: false,
+      });
+      sent.push(item);
+    } catch (e) {
+      console.error("similar sendBatch item failed:", item?.id, item?.name, e?.message || e);
+    }
   }
 
-  const nextOffset = offset + batch.length;
-  const hasMore = nextOffset < items.length;
-
-  if (hasMore) {
-    await ctx.reply("➡️ Є ще схожі варіанти:", {
-      reply_markup: moreSimilarKeyboard(baseId).reply_markup,
-    });
-  }
-
-  return nextOffset;
-}
+  const nextOffset = offset + sent.length;
 
 async function onSimilarAction(ctx, perfumeId) {
   const base = getPerfumeById(Number(perfumeId));
@@ -176,9 +172,7 @@ async function onSimilarAction(ctx, perfumeId) {
     return;
   }
 
-  await ctx.reply(`🔁 Шукаю схожі на **${base.name}**...`, {
-    parse_mode: "Markdown",
-  });
+ await ctx.reply(`🔁 Шукаю схожі на ${base.name}...`);
 
   const analysis = buildAnalysisFromPerfume(base);
 
@@ -249,9 +243,7 @@ async function onSimilarAction(ctx, perfumeId) {
     sentIds: [],
   });
 
-  await ctx.reply(`✨ Найбільш схожі на **${base.name}**:`, {
-    parse_mode: "Markdown",
-  });
+await ctx.reply(`✨ Найбільш схожі на ${base.name}:`);
 
   const nextOffset = await sendBatch(ctx, base.id, allItems, 0, 3);
 

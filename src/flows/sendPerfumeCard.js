@@ -12,7 +12,6 @@ async function sendPerfumeCard(ctx, item, options = {}) {
         { url: photo },
         {
           caption,
-          parse_mode: "Markdown",
           reply_markup: keyboard?.reply_markup,
         },
       );
@@ -22,7 +21,6 @@ async function sendPerfumeCard(ctx, item, options = {}) {
   }
 
   return ctx.reply(caption, {
-    parse_mode: "Markdown",
     reply_markup: keyboard?.reply_markup,
   });
 }

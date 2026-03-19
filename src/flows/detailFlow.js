@@ -77,16 +77,15 @@ async function onDetailAction(ctx, perfumeId) {
   }
 
   await ctx.reply(
-    `🧴 **${item.name}**\n\n` +
-      `🔢 Код: ${item.number_code || "—"}\n` +
-      `👤 Для кого: ${item.gender || "—"}\n` +
-      `🧴 Тип: ${item.category || "—"}\n` +
-      `🍂 Сезон: ${item.season || "—"}\n` +
-      `🌿 Ноти: ${item.notes || "—"}\n` +
-      `✨ Напрям: ${item.accords || item.keywords || "—"}\n\n` +
-      `${item.description || item.short_desc || ""}`,
-    { parse_mode: "Markdown" },
-  );
+  `🧴 ${item.name}\n\n` +
+    `🔢 Код: ${item.number_code || "—"}\n` +
+    `👤 Для кого: ${item.gender || "—"}\n` +
+    `🧴 Тип: ${item.category || "—"}\n` +
+    `🍂 Сезон: ${item.season || "—"}\n` +
+    `🌿 Ноти: ${item.notes || "—"}\n` +
+    `✨ Напрям: ${item.accords || item.keywords || "—"}\n\n` +
+    `${item.description || item.short_desc || ""}`,
+);
 }
 
 module.exports = { onDetailAction };
