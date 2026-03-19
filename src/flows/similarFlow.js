@@ -163,6 +163,8 @@ async function sendBatch(ctx, baseId, items, offset = 0, batchSize = 3) {
   }
 
   const nextOffset = offset + sent.length;
+ return nextOffset;
+} 
 
 async function onSimilarAction(ctx, perfumeId) {
   const base = getPerfumeById(Number(perfumeId));
