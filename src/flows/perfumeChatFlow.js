@@ -2,7 +2,9 @@ const { SEARCH } = require("../config");
 const { PICK_MODE_HELP } = require("../ui/messages");
 
 const { analyzePerfumeIntent } = require("../llm/perfumeAnalyzer");
-const { writeReferencePerfumeIntro } = require("../llm/writeReferencePerfumeIntro");
+const {
+  writeReferencePerfumeIntro,
+} = require("../llm/writeReferencePerfumeIntro");
 const { buildSearchProfile } = require("../llm/perfumeSearchProfile");
 const { attachReasons } = require("../llm/resultExplainer");
 const { rerankAndExplain } = require("../llm/rerankExplainer");
@@ -106,7 +108,10 @@ async function onUserPickAction(ctx) {
    Helpers
 ========================= */
 function norm(s) {
-  return String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function uniqById(items) {
@@ -135,8 +140,7 @@ function mergeGptReasons(items, gptSelected = []) {
       why_selected: Array.isArray(hit.why) ? hit.why : [],
       assistant_comment: String(hit.assistant_comment || "").trim(),
       match_type: hit.match_type || "",
-      confidence:
-        typeof hit.confidence === "number" ? hit.confidence : null,
+      confidence: typeof hit.confidence === "number" ? hit.confidence : null,
       best_for_gpt: Array.isArray(hit.best_for) ? hit.best_for : [],
       projection_fit: hit.projection_fit || "unknown",
       longevity_fit: hit.longevity_fit || "unknown",
@@ -172,7 +176,9 @@ function renderMetaComment(item) {
       medium: "середня стійкість",
       long: "хороша стійкість",
     };
-    parts.push(`⏳ Стійкість: ${map[item.longevity_fit] || item.longevity_fit}`);
+    parts.push(
+      `⏳ Стійкість: ${map[item.longevity_fit] || item.longevity_fit}`,
+    );
   }
 
   if (Array.isArray(item.best_for_gpt) && item.best_for_gpt.length) {
@@ -198,11 +204,11 @@ function hasSearchData(analysis) {
     (analysis?.notes_base && analysis.notes_base.length) ||
     (analysis?.style && analysis.style.length) ||
     (analysis?.accords && analysis.accords.length) ||
-    (analysis?.intent_context?.best_for?.length) ||
+    analysis?.intent_context?.best_for?.length ||
     analysis?.intent_context?.projection !== "unknown" ||
     analysis?.intent_context?.longevity !== "unknown" ||
     analysis?.intent_context?.age_group !== "unknown" ||
-    (analysis?.intent_context?.image_style?.length)
+    analysis?.intent_context?.image_style?.length
   );
 }
 
@@ -219,7 +225,8 @@ function buildPayloadWithExplanations(item) {
 
   return {
     ...item,
-    short_desc: `${item.short_desc || ""}${reasonBlock}${commentBlock}${metaBlock}`.trim(),
+    short_desc:
+      `${item.short_desc || ""}${reasonBlock}${commentBlock}${metaBlock}`.trim(),
   };
 }
 
@@ -368,9 +375,9 @@ async function sendItemsBatch(ctx, items) {
       const payload = buildPayloadWithExplanations(item);
 
       await sendPerfumeCard(ctx, payload, {
-        notes: false,
-        season: false,
-      });
+  notes: true,
+  season: false,
+});
 
       sent.push(item);
     } catch (e) {
@@ -402,7 +409,7 @@ function runFullDbSearch(searchProfile, gender, limit = 120) {
   return findCandidates(profile, limit);
 }
 
-function buildGenderPoolsFromFullDb(text, analysis, searchProfile) {  
+function buildGenderPoolsFromFullDb(text, analysis, searchProfile) {
   const requestedGender = detectRequestedGender(text, analysis, searchProfile);
   const limit = SEARCH.LIMIT_CANDIDATES || 100;
 
@@ -471,22 +478,12 @@ function buildGenderPoolsFromFullDb(text, analysis, searchProfile) {
   };
 }
 
-async function enrichAndRankItems({
-  items,
-  text,
-  analysis,
-  searchProfile,
-}) {
+async function enrichAndRankItems({ items, text, analysis, searchProfile }) {
   let allItems = Array.isArray(items) ? uniqById(items) : [];
 
   if (!allItems.length) return [];
 
-  allItems = rerankTopK(
-    allItems,
-    searchProfile,
-    analysis?.target_name,
-    50,
-  );
+  allItems = rerankTopK(allItems, searchProfile, analysis?.target_name, 50);
 
   try {
     const gptSelected = await rerankAndExplain({
@@ -513,14 +510,20 @@ async function enrichAndRankItems({
 
 async function sendNextBatchFromState(ctx, saved, text = "") {
   if (!saved) {
-    await ctx.reply("ℹ️ Немає збереженого попереднього пошуку. Напишіть новий запит.");
+    await ctx.reply(
+      "ℹ️ Немає збереженого попереднього пошуку. Напишіть новий запит.",
+    );
     return true;
   }
 
   const batchSize = parseBatchSize(text, 3);
   const sentIds = Array.isArray(saved.sentIds) ? saved.sentIds : [];
-  const primaryItems = Array.isArray(saved.primaryItems) ? saved.primaryItems : [];
-  const fallbackItems = Array.isArray(saved.fallbackItems) ? saved.fallbackItems : [];
+  const primaryItems = Array.isArray(saved.primaryItems)
+    ? saved.primaryItems
+    : [];
+  const fallbackItems = Array.isArray(saved.fallbackItems)
+    ? saved.fallbackItems
+    : [];
   const orderedItems = primaryItems.length
     ? uniqById(primaryItems)
     : uniqById(fallbackItems);
@@ -532,7 +535,9 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
   }
 
   const remainingPrimary = primaryItems.filter((x) => !sentIds.includes(x.id));
-  const remainingFallback = fallbackItems.filter((x) => !sentIds.includes(x.id));
+  const remainingFallback = fallbackItems.filter(
+    (x) => !sentIds.includes(x.id),
+  );
 
   let sourceLabel = "ще варіанти";
   let remaining = [];
@@ -556,23 +561,23 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
   }
 
   const safeRemaining = remaining.filter((x) => !sentIds.includes(x.id));
-const batch = safeRemaining.slice(0, batchSize);
+  const batch = safeRemaining.slice(0, batchSize);
 
   await ctx.reply(
     `🔎 Показую ${Math.min(batchSize, remaining.length)} ${sourceLabel}:`,
   );
 
- const { sent, failed } = await sendItemsBatch(ctx, batch);
+  const { sent, failed } = await sendItemsBatch(ctx, batch);
 
-const nextSentIds = [...sentIds, ...sent.map((x) => x.id)];
-const nextOffset = nextSentIds.length;
+  const nextSentIds = [...sentIds, ...sent.map((x) => x.id)];
+  const nextOffset = nextSentIds.length;
 
-if (failed.length) {
-  console.error(
-    "Next batch failed items:",
-    failed.map((x) => ({ id: x.id, name: x.name })),
-  );
-}
+  if (failed.length) {
+    console.error(
+      "Next batch failed items:",
+      failed.map((x) => ({ id: x.id, name: x.name })),
+    );
+  }
 
   setLastSearch(ctx, {
     ...saved,
@@ -614,9 +619,7 @@ async function onUserText(ctx) {
   if (exactByName) {
     clearLastSearch(ctx);
 
-    await ctx.reply(`✅ Знайшов точний збіг за назвою **${exactByName.name}**:`, {
-      parse_mode: "Markdown",
-    });
+    await ctx.reply(`✅ Знайшов точний збіг за назвою ${exactByName.name}:`);
 
     await sendPerfumeCard(ctx, exactByName, {
       notes: true,
@@ -638,9 +641,7 @@ async function onUserText(ctx) {
     if (byExactCode) {
       clearLastSearch(ctx);
 
-      await ctx.reply(`✅ Знайшов аромат за кодом **${code}**:`, {
-        parse_mode: "Markdown",
-      });
+      await ctx.reply(`✅ Знайшов аромат за кодом ${code}:`);
 
       await sendPerfumeCard(ctx, byExactCode, {
         notes: true,
@@ -658,8 +659,7 @@ async function onUserText(ctx) {
         clearLastSearch(ctx);
 
         await ctx.reply(
-          `✅ Знайшов аромат за номером **${num}**. У базі він записаний як **${byNumeric[0].number_code}**:`,
-          { parse_mode: "Markdown" },
+          `✅ Знайшов аромат за номером ${num}. У базі він записаний як ${byNumeric[0].number_code}:`,
         );
 
         await sendPerfumeCard(ctx, byNumeric[0], {
@@ -673,20 +673,22 @@ async function onUserText(ctx) {
       if (byNumeric.length > 1) {
         const top = byNumeric.slice(0, 5);
         const listText =
-          `🔎 За номером **${num}** знайшов кілька варіантів:\n\n` +
+          `🔎 За номером ${num} знайшов кілька варіантів:\n\n` +
           top
-            .map((item, i) => `${i + 1}. **${item.number_code || "—"}** — ${item.name}`)
+            .map(
+              (item, i) =>
+                `${i + 1}. ${item.number_code || "—"} — ${item.name}`,
+            )
             .join("\n") +
-          `\n\n✍️ Напишіть точний код з буквою, наприклад: **${top[0]?.number_code || `${num}A`}**`;
+          `\n\n✍️ Напишіть точний код з буквою, наприклад: ${top[0]?.number_code || `${num}A`}`;
 
-        await ctx.reply(listText, { parse_mode: "Markdown" });
+        await ctx.reply(listText);
         return true;
       }
     }
 
     await ctx.reply(
-      `❌ Не знайшов аромат з кодом **${code}**.\n\nСпробуйте:\n• інший код\n• назву аромату\n• ноти\n• або стиль`,
-      { parse_mode: "Markdown" },
+      `❌ Не знайшов аромат з кодом ${code}.\n\nСпробуйте:\n• інший код\n• назву аромату\n• ноти\n• або стиль`,
     );
 
     return true;
@@ -757,21 +759,21 @@ async function onUserText(ctx) {
   try {
     searchPools = buildGenderPoolsFromFullDb(text, analysis, searchProfile);
     console.log("SEARCH DEBUG", {
-  userText: text,
-  requestedGender: searchPools?.requestedGender || null,
-  primaryCount: Array.isArray(searchPools?.primaryItems)
-    ? searchPools.primaryItems.length
-    : 0,
-  fallbackCount: Array.isArray(searchPools?.fallbackItems)
-    ? searchPools.fallbackItems.length
-    : 0,
-  allCount: Array.isArray(searchPools?.allItems)
-    ? searchPools.allItems.length
-    : 0,
-  analysisQueryType: analysis?.query_type || null,
-  searchProfileGender: searchProfile?.gender || null,
-  searchTerms: searchProfile?.search_terms || null,
-});
+      userText: text,
+      requestedGender: searchPools?.requestedGender || null,
+      primaryCount: Array.isArray(searchPools?.primaryItems)
+        ? searchPools.primaryItems.length
+        : 0,
+      fallbackCount: Array.isArray(searchPools?.fallbackItems)
+        ? searchPools.fallbackItems.length
+        : 0,
+      allCount: Array.isArray(searchPools?.allItems)
+        ? searchPools.allItems.length
+        : 0,
+      analysisQueryType: analysis?.query_type || null,
+      searchProfileGender: searchProfile?.gender || null,
+      searchTerms: searchProfile?.search_terms || null,
+    });
   } catch (e) {
     console.error("buildGenderPoolsFromFullDb error:", e);
     await ctx.reply("❌ Помилка пошуку в базі.");
@@ -804,31 +806,26 @@ async function onUserText(ctx) {
     return true;
   }
 
-  const allItems = uniqById(
-    primaryItems.length ? primaryItems : fallbackItems,
-  );
+  const allItems = uniqById(primaryItems.length ? primaryItems : fallbackItems);
 
   if (!allItems.length) {
     if (requestedGender === "female") {
       await ctx.reply(
-        "❌ Не знайшов жіночих ароматів за цим запитом. Уточніть ноти або стиль.",
-        { parse_mode: "Markdown" },
+        "❌ За запитом не знайшов відповідних жіночих ароматів. Уточніть ноти або стиль.",
       );
       return true;
     }
 
     if (requestedGender === "male") {
       await ctx.reply(
-        "❌ Не знайшов чоловічих ароматів за цим запитом. Уточніть ноти або стиль.",
-        { parse_mode: "Markdown" },
+        "❌ За запитом не знайшов відповідних чоловічих ароматів. Уточніть ноти або стиль.",
       );
       return true;
     }
 
     if (requestedGender === "unisex") {
       await ctx.reply(
-        "❌ За запитом не знайшов відповідних **унісекс** ароматів. Уточніть ноти або стиль.",
-        { parse_mode: "Markdown" },
+        "❌ За запитом не знайшов відповідних унісекс ароматів. Уточніть ноти або стиль.",
       );
       return true;
     }
@@ -867,24 +864,30 @@ async function onUserText(ctx) {
   }
 
   if (usedFallback && requestedGender === "female") {
-    await ctx.reply("ℹ️ Жіночих не знайшов, тому показую найближчі варіанти унісекс.");
+    await ctx.reply(
+      "ℹ️ Жіночих не знайшов, тому показую найближчі варіанти унісекс.",
+    );
   } else if (usedFallback && requestedGender === "male") {
-    await ctx.reply("ℹ️ Чоловічих не знайшов, тому показую найближчі варіанти унісекс.");
+    await ctx.reply(
+      "ℹ️ Чоловічих не знайшов, тому показую найближчі варіанти унісекс.",
+    );
   }
 
-  await ctx.reply(`✨ Підібрав ${Math.min(3, firstBatch.length)} найбільш схожі варіанти:`);
-
-const { sent, failed } = await sendItemsBatch(ctx, firstBatch);
-
-const sentIds = sent.map((x) => x.id);
-const offset = sentIds.length;
-
-if (failed.length) {
-  console.error(
-    "First batch failed items:",
-    failed.map((x) => ({ id: x.id, name: x.name })),
+  await ctx.reply(
+    `✨ Підібрав ${Math.min(3, firstBatch.length)} найбільш схожі варіанти:`,
   );
-}
+
+  const { sent, failed } = await sendItemsBatch(ctx, firstBatch);
+
+  const sentIds = sent.map((x) => x.id);
+  const offset = sentIds.length;
+
+  if (failed.length) {
+    console.error(
+      "First batch failed items:",
+      failed.map((x) => ({ id: x.id, name: x.name })),
+    );
+  }
 
   setLastSearch(ctx, {
     originalText: text,

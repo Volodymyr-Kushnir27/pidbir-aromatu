@@ -25,8 +25,7 @@ function mergeGptReasons(items, gptSelected = []) {
       why_selected: Array.isArray(hit.why) ? hit.why : [],
       assistant_comment: String(hit.assistant_comment || "").trim(),
       match_type: hit.match_type || "",
-      confidence:
-        typeof hit.confidence === "number" ? hit.confidence : null,
+      confidence: typeof hit.confidence === "number" ? hit.confidence : null,
       best_for_gpt: Array.isArray(hit.best_for) ? hit.best_for : [],
       projection_fit: hit.projection_fit || "unknown",
       longevity_fit: hit.longevity_fit || "unknown",
@@ -62,7 +61,9 @@ function renderMetaComment(item) {
       medium: "середня стійкість",
       long: "хороша стійкість",
     };
-    parts.push(`⏳ Стійкість: ${map[item.longevity_fit] || item.longevity_fit}`);
+    parts.push(
+      `⏳ Стійкість: ${map[item.longevity_fit] || item.longevity_fit}`,
+    );
   }
 
   if (Array.isArray(item.best_for_gpt) && item.best_for_gpt.length) {
@@ -134,15 +135,14 @@ function decorateItem(item) {
     ? `\n\n💡 Чому обрано:\n• ${why.join("\n• ")}`
     : `\n\n💡 Чому обрано:\n• близький за загальним характером`;
 
-  const commentBlock = assistantComment
-    ? `\n\n🗣 ${assistantComment}`
-    : "";
+  const commentBlock = assistantComment ? `\n\n🗣 ${assistantComment}` : "";
 
   const metaBlock = renderMetaComment(item);
 
   return {
     ...item,
-    short_desc: `${item.short_desc || ""}${reasonBlock}${commentBlock}${metaBlock}`.trim(),
+    short_desc:
+      `${item.short_desc || ""}${reasonBlock}${commentBlock}${metaBlock}`.trim(),
   };
 }
 
@@ -153,18 +153,23 @@ async function sendBatch(ctx, baseId, items, offset = 0, batchSize = 3) {
   for (const item of batch) {
     try {
       await sendPerfumeCard(ctx, decorateItem(item), {
-        notes: false,
+        notes: true,
         season: false,
       });
       sent.push(item);
     } catch (e) {
-      console.error("similar sendBatch item failed:", item?.id, item?.name, e?.message || e);
+      console.error(
+        "similar sendBatch item failed:",
+        item?.id,
+        item?.name,
+        e?.message || e,
+      );
     }
   }
 
   const nextOffset = offset + sent.length;
- return nextOffset;
-} 
+  return nextOffset;
+}
 
 async function onSimilarAction(ctx, perfumeId) {
   const base = getPerfumeById(Number(perfumeId));
@@ -174,7 +179,7 @@ async function onSimilarAction(ctx, perfumeId) {
     return;
   }
 
- await ctx.reply(`🔁 Шукаю схожі на ${base.name}...`);
+  await ctx.reply(`🔁 Шукаю схожі на ${base.name}...`);
 
   const analysis = buildAnalysisFromPerfume(base);
 
@@ -245,7 +250,7 @@ async function onSimilarAction(ctx, perfumeId) {
     sentIds: [],
   });
 
-await ctx.reply(`✨ Найбільш схожі на ${base.name}:`);
+  await ctx.reply(`✨ Найбільш схожі на ${base.name}:`);
 
   const nextOffset = await sendBatch(ctx, base.id, allItems, 0, 3);
 
@@ -265,9 +270,12 @@ async function onSimilarMoreAction(ctx, perfumeId) {
   const saved = getSimilarState(ctx.chat.id, Number(perfumeId));
 
   if (!saved || !Array.isArray(saved.items) || !saved.items.length) {
-    await ctx.reply("ℹ️ Більше схожих варіантів немає. Натисніть `Схожі` ще раз.", {
-      parse_mode: "Markdown",
-    });
+    await ctx.reply(
+      "ℹ️ Більше схожих варіантів немає. Натисніть `Схожі` ще раз.",
+      {
+        parse_mode: "Markdown",
+      },
+    );
     return;
   }
 
