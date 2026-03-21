@@ -1,6 +1,26 @@
 const { getPerfumeById } = require("../search/catalogRepo");
 const { chatJSON } = require("../llm/client");
 
+const detailInFlight = new Map();
+// key = `${chatId}:${perfumeId}`
+
+function getDetailKey(ctx, perfumeId) {
+  return `${ctx.chat?.id || 0}:${Number(perfumeId) || 0}`;
+}
+
+function buildFallbackText(item) {
+  return (
+    `🧴 ${item.name}\n\n` +
+    `🔢 Код: ${item.number_code || "—"}\n` +
+    `👤 Для кого: ${item.gender || "—"}\n` +
+    `🧴 Тип: ${item.category || "—"}\n` +
+    `🍂 Сезон: ${item.season || "—"}\n` +
+    `🌿 Ноти: ${item.notes || "—"}\n` +
+    `✨ Напрям: ${item.accords || item.keywords || "—"}\n\n` +
+    `${item.description || item.short_desc || ""}`
+  );
+}
+
 async function writePerfumeDetails(item) {
   const system = `
 Ти досвідчений парфумерний консультант.
@@ -55,6 +75,15 @@ async function writePerfumeDetails(item) {
   return String(json?.text || "").trim();
 }
 
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`DETAIL_TIMEOUT_${ms}`)), ms),
+    ),
+  ]);
+}
+
 async function onDetailAction(ctx, perfumeId) {
   const item = getPerfumeById(Number(perfumeId));
 
@@ -63,29 +92,39 @@ async function onDetailAction(ctx, perfumeId) {
     return;
   }
 
-  await ctx.reply("🧠 Готую детальний розбір аромату...");
+  const key = getDetailKey(ctx, perfumeId);
 
-  try {
-    const text = await writePerfumeDetails(item);
-
-    if (text) {
-      await ctx.reply(text);
-      return;
-    }
-  } catch (e) {
-    console.error("onDetailAction error:", e);
+  if (detailInFlight.has(key)) {
+    try {
+      await ctx.answerCbQuery("⏳ Детальний опис уже готується...");
+    } catch {}
+    return;
   }
 
-  await ctx.reply(
-  `🧴 ${item.name}\n\n` +
-    `🔢 Код: ${item.number_code || "—"}\n` +
-    `👤 Для кого: ${item.gender || "—"}\n` +
-    `🧴 Тип: ${item.category || "—"}\n` +
-    `🍂 Сезон: ${item.season || "—"}\n` +
-    `🌿 Ноти: ${item.notes || "—"}\n` +
-    `✨ Напрям: ${item.accords || item.keywords || "—"}\n\n` +
-    `${item.description || item.short_desc || ""}`,
-);
+  detailInFlight.set(key, true);
+
+  try {
+    try {
+      await ctx.answerCbQuery("🧠 Готую детальний опис...");
+    } catch {}
+
+    await ctx.reply("🧠 Готую детальний розбір аромату...");
+
+    try {
+      const text = await withTimeout(writePerfumeDetails(item), 8000);
+
+      if (text) {
+        await ctx.reply(text);
+        return;
+      }
+    } catch (e) {
+      console.error("onDetailAction error:", e?.message || e);
+    }
+
+    await ctx.reply(buildFallbackText(item));
+  } finally {
+    detailInFlight.delete(key);
+  }
 }
 
 module.exports = { onDetailAction };

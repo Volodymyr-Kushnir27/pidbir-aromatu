@@ -294,7 +294,7 @@ function detectRequestedGender(text, analysis, searchProfile) {
   return null;
 }
 
-function isFollowupForMore(text) {
+function isFollowupForMore(text, hasSavedSearch = false) {
   const t = norm(text);
 
   if (!t) return false;
@@ -302,22 +302,23 @@ function isFollowupForMore(text) {
   if (
     t === "ще" ||
     t === "далі" ||
-    t === "інші" ||
+    t === "ще 3" ||
+    t === "ще 5" ||
+    t === "дай ще" ||
+    t === "дай ще 3" ||
+    t === "дай ще 5" ||
+    t === "покажи ще" ||
+    t === "покажи ще 3" ||
+    t === "покажи ще 5" ||
     t === "ще варіанти" ||
     t === "інші варіанти" ||
-    t === "які ще є" ||
-    t === "що ще є" ||
-    t === "покажи ще" ||
     t === "ще аромати" ||
     t === "ще парфуми"
   ) {
     return true;
   }
 
-  if (
-    /\b(ще|далі)\b/.test(t) &&
-    /\b(аромат|аромати|варіант|варіанти|парфум|парфуми)\b/.test(t)
-  ) {
+  if (/\b(ще|далі)\b/.test(t) && /\b\d{1,2}\b/.test(t)) {
     return true;
   }
 
@@ -325,7 +326,7 @@ function isFollowupForMore(text) {
     return true;
   }
 
-  if (/\bще\b/.test(t) && /\b\d{1,2}\b/.test(t)) {
+  if (hasSavedSearch && /\b(ще|далі)\b/.test(t)) {
     return true;
   }
 
@@ -628,10 +629,11 @@ async function onUserText(ctx) {
   const text = String(ctx.message?.text || "").trim();
   if (!text) return true;
 
-  if (isFollowupForMore(text)) {
-    const saved = getLastSearch(ctx);
-    return sendNextBatchFromState(ctx, saved, text);
-  }
+  const saved = getLastSearch(ctx);
+
+if (isFollowupForMore(text, Boolean(saved))) {
+  return sendNextBatchFromState(ctx, saved, text);
+}
 
   /* =========================
      0. EXACT NAME MATCH
