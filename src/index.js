@@ -152,10 +152,18 @@ async function showHome(ctx) {
   } catch {}
 
   if (role === "admin") {
+    await ctx.reply("✅ Авторизація успішна.", {
+      reply_markup: { remove_keyboard: true },
+    });
+
     return ctx.reply("👑 Admin Menu", adminMenuKeyboard());
   }
 
   if (role === "user") {
+    await ctx.reply("✅ Авторизація успішна.", {
+      reply_markup: { remove_keyboard: true },
+    });
+
     return ctx.reply("Оберіть режим роботи:", userMenuKeyboard());
   }
 

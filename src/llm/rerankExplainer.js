@@ -27,7 +27,7 @@ async function rerankAndExplain({
   candidates,
   topK = 3,
 }) {
-  const shortCandidates = (candidates || []).slice(0, 10).map(compactCandidate);
+  const shortCandidates = (candidates || []).slice(0, 6).map(compactCandidate);
 
   const system = `
 Ти парфумерний AI-консультант, який робить фінальний відбір ароматів із уже знайдених кандидатів.
