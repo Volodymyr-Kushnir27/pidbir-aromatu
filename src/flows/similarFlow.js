@@ -6,17 +6,37 @@ const { rerankTopK } = require("../search/candidateRerank");
 const { getPerfumeById } = require("../search/catalogRepo");
 const { sendPerfumeCard } = require("./sendPerfumeCard");
 const { SEARCH } = require("../config");
-const { moreSimilarKeyboard } = require("../ui/keyboards");
 const {
   setSimilarState,
   getSimilarState,
   clearSimilarState,
 } = require("./similarState");
 
-function mergeGptReasons(items, gptSelected = []) {
-  const byId = new Map(gptSelected.map((x) => [Number(x.id), x]));
+const similarInFlight = new Map();
+// key = `${chatId}:${baseId}` -> true
 
-  return items.map((item) => {
+function makeKey(chatId, baseId) {
+  return `${chatId}:${baseId}`;
+}
+
+function uniqById(items) {
+  const seen = new Set();
+  const out = [];
+
+  for (const item of items || []) {
+    const id = Number(item?.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(item);
+  }
+
+  return out;
+}
+
+function mergeGptReasons(items, gptSelected = []) {
+  const byId = new Map((gptSelected || []).map((x) => [Number(x.id), x]));
+
+  return (items || []).map((item) => {
     const hit = byId.get(Number(item.id));
     if (!hit) return item;
 
@@ -31,6 +51,22 @@ function mergeGptReasons(items, gptSelected = []) {
       longevity_fit: hit.longevity_fit || "unknown",
     };
   });
+}
+
+function reorderWithGptPriority(allItems, gptSelected = []) {
+  if (!Array.isArray(allItems) || !allItems.length) return [];
+  if (!Array.isArray(gptSelected) || !gptSelected.length) return allItems;
+
+  const selectedIds = gptSelected.map((x) => Number(x.id));
+  const selectedSet = new Set(selectedIds);
+
+  const prioritized = selectedIds
+    .map((id) => allItems.find((x) => Number(x.id) === id))
+    .filter(Boolean);
+
+  const rest = allItems.filter((x) => !selectedSet.has(Number(x.id)));
+
+  return uniqById([...prioritized, ...rest]);
 }
 
 function renderMetaComment(item) {
@@ -61,9 +97,7 @@ function renderMetaComment(item) {
       medium: "середня стійкість",
       long: "хороша стійкість",
     };
-    parts.push(
-      `⏳ Стійкість: ${map[item.longevity_fit] || item.longevity_fit}`,
-    );
+    parts.push(`⏳ Стійкість: ${map[item.longevity_fit] || item.longevity_fit}`);
   }
 
   if (Array.isArray(item.best_for_gpt) && item.best_for_gpt.length) {
@@ -136,7 +170,6 @@ function decorateItem(item) {
     : `\n\n💡 Чому обрано:\n• близький за загальним характером`;
 
   const commentBlock = assistantComment ? `\n\n🗣 ${assistantComment}` : "";
-
   const metaBlock = renderMetaComment(item);
 
   return {
@@ -146,9 +179,36 @@ function decorateItem(item) {
   };
 }
 
-async function sendBatch(ctx, baseId, items, offset = 0, batchSize = 3) {
+async function createProgressMessage(ctx, text) {
+  try {
+    return await ctx.reply(text);
+  } catch {
+    return null;
+  }
+}
+
+async function updateProgressMessage(ctx, progressMsg, text) {
+  if (!progressMsg?.message_id || !ctx.chat?.id) return;
+
+  try {
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      progressMsg.message_id,
+      undefined,
+      text,
+    );
+  } catch {}
+}
+
+function formatMs(ms) {
+  if (!ms || ms < 1000) return `${ms} мс`;
+  return `${(ms / 1000).toFixed(1)} с`;
+}
+
+async function sendBatch(ctx, items, offset = 0, batchSize = 3) {
   const batch = items.slice(offset, offset + batchSize);
   const sent = [];
+  const failed = [];
 
   for (const item of batch) {
     try {
@@ -164,11 +224,15 @@ async function sendBatch(ctx, baseId, items, offset = 0, batchSize = 3) {
         item?.name,
         e?.message || e,
       );
+      failed.push(item);
     }
   }
 
-  const nextOffset = offset + sent.length;
-  return nextOffset;
+  return {
+    sent,
+    failed,
+    nextOffset: offset + sent.length,
+  };
 }
 
 async function onSimilarAction(ctx, perfumeId) {
@@ -179,89 +243,169 @@ async function onSimilarAction(ctx, perfumeId) {
     return;
   }
 
-  await ctx.reply(`🔁 Шукаю схожі на ${base.name}...`);
+  const key = makeKey(ctx.chat.id, base.id);
 
-  const analysis = buildAnalysisFromPerfume(base);
-
-  let searchProfile;
-  try {
-    searchProfile = await buildSearchProfile(analysis);
-  } catch (e) {
-    console.error("buildSearchProfile(similar) error:", e);
-    await ctx.reply("❌ Не вдалося побудувати профіль схожості.");
+  if (similarInFlight.has(key)) {
+    try {
+      await ctx.answerCbQuery("⏳ Пошук схожих уже виконується...");
+    } catch {}
     return;
   }
 
-  let candidates = [];
-  try {
-    candidates = findCandidates(searchProfile, SEARCH.LIMIT_CANDIDATES || 80);
-  } catch (e) {
-    console.error("findCandidates(similar) error:", e);
-    await ctx.reply("❌ Помилка пошуку схожих у базі.");
-    return;
-  }
+  similarInFlight.set(key, true);
 
-  candidates = candidates.filter((x) => Number(x.id) !== Number(base.id));
-
-  if (!candidates.length) {
-    await ctx.reply("😔 Схожих ароматів у базі не знайшов.");
-    return;
-  }
-
-  let allItems = rerankTopK(candidates, searchProfile, base.name, 50);
+  const startedAt = Date.now();
+  const progressMsg = await createProgressMessage(
+    ctx,
+    `🔁 Шукаю схожі на ${base.name}...\n\n1/4 Аналізую базовий аромат`
+  );
 
   try {
-    const gptSelected = await rerankAndExplain({
-      userText: `Знайди найбільш схожі аромати на ${base.name}`,
-      analysis,
-      searchProfile,
-      candidates: candidates.slice(0, 10),
-      topK: Math.min(10, candidates.length),
+    try {
+      await ctx.answerCbQuery("🔁 Шукаю схожі аромати...");
+    } catch {}
+
+    try {
+      await ctx.sendChatAction("typing");
+    } catch {}
+
+    const analysis = buildAnalysisFromPerfume(base);
+
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      `🔁 Шукаю схожі на ${base.name}...\n\n1/4 Базовий аромат розібрано\n2/4 Будую профіль схожості`
+    );
+
+    let searchProfile;
+    try {
+      searchProfile = await buildSearchProfile(analysis);
+    } catch (e) {
+      console.error("buildSearchProfile(similar) error:", e);
+      await updateProgressMessage(
+        ctx,
+        progressMsg,
+        "❌ Не вдалося побудувати профіль схожості."
+      );
+      await ctx.reply("❌ Не вдалося побудувати профіль схожості.");
+      return;
+    }
+
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      `🔁 Шукаю схожі на ${base.name}...\n\n1/4 Базовий аромат розібрано\n2/4 Профіль готовий\n3/4 Шукаю кандидати в базі`
+    );
+
+    let candidates = [];
+    try {
+      candidates = findCandidates(searchProfile, SEARCH.LIMIT_CANDIDATES || 80);
+    } catch (e) {
+      console.error("findCandidates(similar) error:", e);
+      await updateProgressMessage(
+        ctx,
+        progressMsg,
+        "❌ Помилка пошуку схожих у базі."
+      );
+      await ctx.reply("❌ Помилка пошуку схожих у базі.");
+      return;
+    }
+
+    candidates = candidates.filter((x) => Number(x.id) !== Number(base.id));
+
+    if (!candidates.length) {
+      await updateProgressMessage(
+        ctx,
+        progressMsg,
+        "😔 Схожих ароматів у базі не знайдено."
+      );
+      await ctx.reply("😔 Схожих ароматів у базі не знайшов.");
+      return;
+    }
+
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      `🔁 Шукаю схожі на ${base.name}...\n\n1/4 Базовий аромат розібрано\n2/4 Профіль готовий\n3/4 Кандидати знайдені\n4/4 Роблю фінальний відбір`
+    );
+
+    let allItems = rerankTopK(candidates, searchProfile, base.name, 25);
+
+    try {
+      const gptSelected = await rerankAndExplain({
+        userText: `Знайди найбільш схожі аромати на ${base.name}`,
+        analysis,
+        searchProfile,
+        candidates: allItems.slice(0, 6),
+        topK: Math.min(6, allItems.length),
+      });
+
+      if (Array.isArray(gptSelected) && gptSelected.length) {
+        allItems = mergeGptReasons(allItems, gptSelected);
+        allItems = reorderWithGptPriority(allItems, gptSelected);
+      }
+    } catch (e) {
+      console.error("rerankAndExplain(similar) error:", e);
+    }
+
+    allItems = attachReasons(allItems, searchProfile);
+    allItems = uniqById(allItems);
+
+    if (!allItems.length) {
+      await updateProgressMessage(
+        ctx,
+        progressMsg,
+        "❌ Не вдалося відібрати схожі аромати."
+      );
+      await ctx.reply("❌ Не вдалося відібрати схожі аромати.");
+      return;
+    }
+
+    setSimilarState(ctx.chat.id, base.id, {
+      items: allItems,
+      offset: 0,
+      sentIds: [],
     });
 
-    if (Array.isArray(gptSelected) && gptSelected.length) {
-      const selectedIds = gptSelected.map((x) => Number(x.id));
-      const selectedItems = candidates.filter((x) =>
-        selectedIds.includes(Number(x.id)),
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      `🔁 Шукаю схожі на ${base.name}...\n\n1/4 Базовий аромат розібрано\n2/4 Профіль готовий\n3/4 Кандидати знайдені\n4/4 Відбір завершено\n📦 Надсилаю результати`
+    );
+
+    await ctx.reply(`✨ Найбільш схожі на ${base.name}:`);
+
+    const { sent, failed, nextOffset } = await sendBatch(ctx, allItems, 0, 3);
+
+    if (failed.length) {
+      console.error(
+        "similar first batch failed:",
+        failed.map((x) => ({ id: x.id, name: x.name }))
       );
-
-      if (selectedItems.length) {
-        allItems = selectedIds
-          .map((id) => selectedItems.find((x) => Number(x.id) === id))
-          .filter(Boolean);
-
-        allItems = mergeGptReasons(allItems, gptSelected);
-      }
     }
-  } catch (e) {
-    console.error("rerankAndExplain(similar) error:", e);
-  }
 
-  allItems = attachReasons(allItems, searchProfile);
+    setSimilarState(ctx.chat.id, base.id, {
+      items: allItems,
+      offset: nextOffset,
+      sentIds: sent.map((x) => x.id),
+    });
 
-  if (!allItems.length) {
-    await ctx.reply("❌ Не вдалося відібрати схожі аромати.");
-    return;
-  }
+    const totalMs = Date.now() - startedAt;
 
-  setSimilarState(ctx.chat.id, base.id, {
-    items: allItems,
-    offset: 0,
-    sentIds: [],
-  });
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      `✅ Схожі аромати знайдено за ${formatMs(totalMs)}`
+    );
 
-  await ctx.reply(`✨ Найбільш схожі на ${base.name}:`);
-
-  const nextOffset = await sendBatch(ctx, base.id, allItems, 0, 3);
-
-  setSimilarState(ctx.chat.id, base.id, {
-    items: allItems,
-    offset: nextOffset,
-    sentIds: allItems.slice(0, nextOffset).map((x) => x.id),
-  });
-
-  if (nextOffset >= allItems.length) {
-    clearSimilarState(ctx.chat.id, base.id);
+    const left = allItems.length - sent.length;
+    if (left > 0) {
+      await ctx.reply(`➡️ Є ще ${left} схожих варіантів. Натисніть "Схожі" ще раз.`);
+    } else {
+      clearSimilarState(ctx.chat.id, base.id);
+    }
+  } finally {
+    similarInFlight.delete(key);
   }
 }
 
@@ -270,16 +414,12 @@ async function onSimilarMoreAction(ctx, perfumeId) {
   const saved = getSimilarState(ctx.chat.id, Number(perfumeId));
 
   if (!saved || !Array.isArray(saved.items) || !saved.items.length) {
-    await ctx.reply(
-      "ℹ️ Більше схожих варіантів немає. Натисніть `Схожі` ще раз.",
-      {
-        parse_mode: "Markdown",
-      },
-    );
+    await ctx.reply("ℹ️ Більше схожих варіантів немає. Натисніть Схожі ще раз.");
     return;
   }
 
-  const remaining = saved.items.filter((x) => !saved.sentIds.includes(x.id));
+  const sentIds = Array.isArray(saved.sentIds) ? saved.sentIds : [];
+  const remaining = saved.items.filter((x) => !sentIds.includes(x.id));
 
   if (!remaining.length) {
     clearSimilarState(ctx.chat.id, Number(perfumeId));
@@ -288,28 +428,36 @@ async function onSimilarMoreAction(ctx, perfumeId) {
   }
 
   if (base) {
-    await ctx.reply(`🔎 Показую ще схожі на **${base.name}**:`, {
-      parse_mode: "Markdown",
-    });
+    await ctx.reply(`🔎 Показую ще схожі на ${base.name}:`);
   }
 
-  const nextOffset = await sendBatch(
+  const { sent, failed, nextOffset } = await sendBatch(
     ctx,
-    Number(perfumeId),
     saved.items,
     saved.offset,
     3,
   );
 
-  const nextSent = saved.items.slice(0, nextOffset).map((x) => x.id);
+  if (failed.length) {
+    console.error(
+      "similar next batch failed:",
+      failed.map((x) => ({ id: x.id, name: x.name }))
+    );
+  }
+
+  const nextSentIds = [...sentIds, ...sent.map((x) => x.id)];
 
   setSimilarState(ctx.chat.id, Number(perfumeId), {
     items: saved.items,
     offset: nextOffset,
-    sentIds: nextSent,
+    sentIds: nextSentIds,
   });
 
-  if (nextOffset >= saved.items.length) {
+  const left = saved.items.length - nextSentIds.length;
+
+  if (left > 0) {
+    await ctx.reply(`➡️ Ще залишилось ${left} схожих варіантів.`);
+  } else {
     clearSimilarState(ctx.chat.id, Number(perfumeId));
     await ctx.reply("✅ Це були всі схожі варіанти.");
   }
