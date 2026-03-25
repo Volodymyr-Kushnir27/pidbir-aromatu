@@ -165,17 +165,19 @@ function decorateItem(item) {
   const why = Array.isArray(item.why_selected) ? item.why_selected : [];
   const assistantComment = String(item.assistant_comment || "").trim();
 
-  const reasonBlock = why.length
-    ? `\n\n💡 Чому обрано:\n• ${why.join("\n• ")}`
-    : `\n\n💡 Чому обрано:\n• близький за загальним характером`;
+  const whyLines = why.length
+    ? why.slice(0, 3).map((x) => `• ${String(x || "").trim()}`).join("\n")
+    : "• близький за характером до базового аромату\n• має схожий напрям і загальне враження";
 
-  const commentBlock = assistantComment ? `\n\n🗣 ${assistantComment}` : "";
+  const commentBlock = assistantComment
+    ? `\n\n🗣 Порада:\n${assistantComment}`
+    : "";
+
   const metaBlock = renderMetaComment(item);
 
   return {
     ...item,
-    short_desc:
-      `${item.short_desc || ""}${reasonBlock}${commentBlock}${metaBlock}`.trim(),
+    short_desc: `${String(item.short_desc || "").trim()}\n\n💡 Чому обрано:\n${whyLines}${commentBlock}${metaBlock}`.trim(),
   };
 }
 
