@@ -33,6 +33,12 @@ async function replyAdmin(ctx, text) {
   return ctx.reply(text, adminMenuKeyboard());
 }
 
+function renderTgWithCount(u) {
+  if (!u?.tg_id) return "";
+  const count = Number(u?.search_count || 0);
+  return ` | tg_id: ${u.tg_id} (${count})`;
+}
+
 async function onAdminAction(ctx, action) {
   switch (action) {
     case "ADD_USER":
@@ -63,7 +69,7 @@ async function onAdminAction(ctx, action) {
         arr
           .map((u, i) => {
             const fio = u.fio || "без ФІО";
-            const tg = u.tg_id ? ` | tg_id: ${u.tg_id}` : "";
+            const tg = renderTgWithCount(u);
             return `${i + 1}. ${u.phone} — ${fio}${tg}`;
           })
           .join("\n");
@@ -83,7 +89,7 @@ async function onAdminAction(ctx, action) {
         arr
           .map((u, i) => {
             const fio = u.fio || "без ФІО";
-            const tg = u.tg_id ? ` | tg_id: ${u.tg_id}` : "";
+            const tg = renderTgWithCount(u);
             return `${i + 1}. ${u.phone} — ${fio}${tg}`;
           })
           .join("\n");
@@ -171,5 +177,4 @@ module.exports = {
   onAdminAction,
   onAdminText,
   clearAdminState,
-  
 };

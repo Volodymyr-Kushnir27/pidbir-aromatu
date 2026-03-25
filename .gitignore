@@ -3,4 +3,5 @@ cat > .gitignore << 'EOF'
 node_modules
 *.log
 EOF
-
+echo "*.sqlite-wal" >> .gitignore
+echo "*.sqlite-shm" >> .gitignore
