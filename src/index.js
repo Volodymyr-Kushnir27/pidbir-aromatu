@@ -35,6 +35,7 @@ const {
   onAdminAction,
   onAdminText,
   clearAdminState,
+  cancelAdminFlowIfAny,
 } = require("./flows/adminFlow");
 
 const {
@@ -334,14 +335,21 @@ bot.on("callback_query", async (ctx) => {
     return onDetailAction(ctx, perfumeId);
   }
 
-  if (data === ACTIONS.BACK_HOME) {
-    return showHome(ctx);
-  }
+if (data === ACTIONS.BACK_HOME) {
+  try {
+    await cancelAdminFlowIfAny(ctx, true);
+  } catch {}
+  return showHome(ctx);
+}
 
   if (data === ACTIONS.EXIT_PICK) {
-    try {
-      disableMode(ctx);
-    } catch {}
+  try {
+    await cancelAdminFlowIfAny(ctx, true);
+  } catch {}
+
+  try {
+    disableMode(ctx);
+  } catch {}
 
     if (role === "admin") {
       return ctx.reply("✅ Режим підбору вимкнено.", adminMenuKeyboard());
@@ -377,12 +385,16 @@ bot.on("callback_query", async (ctx) => {
   }
 
   if (data === ACTIONS.USER_PICK) {
-    if (role !== "admin" && role !== "user") {
-      return ctx.reply("⛔ Немає доступу.", shareContactKeyboard());
-    }
-
-    return onUserPickAction(ctx);
+  if (role !== "admin" && role !== "user") {
+    return ctx.reply("⛔ Немає доступу.", shareContactKeyboard());
   }
+
+  try {
+    await cancelAdminFlowIfAny(ctx, true);
+  } catch {}
+
+  return onUserPickAction(ctx);
+}
 
   return ctx.reply("⚠️ Невідома дія кнопки.");
 });
