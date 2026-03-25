@@ -145,9 +145,7 @@ async function sendPerfumeCard(ctx, item, options = {}) {
       await ctx.reply(part);
     }
   }
-
-  return first;
-}
+  
 console.log("CARD DEBUG", {
   id: item?.id,
   name: item?.name,
@@ -156,5 +154,8 @@ console.log("CARD DEBUG", {
   fullCaptionLength: fullCaption.length,
   shortCaptionLength: shortCaption.length,
 });
+
+  return first;
+}
 
 module.exports = { sendPerfumeCard };
