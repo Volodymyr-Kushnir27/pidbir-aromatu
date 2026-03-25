@@ -155,46 +155,8 @@ function mergeGptReasons(items, gptSelected = []) {
   });
 }
 
-function renderMetaComment(item) {
-  const parts = [];
-
-  if (item.match_type) {
-    const map = {
-      close_match: "дуже близький загальний збіг",
-      style_match: "сильний збіг по стилю",
-      note_match: "сильний збіг по нотах",
-      occasion_match: "добре підходить під сценарій використання",
-    };
-    parts.push(`🎯 Збіг: ${map[item.match_type] || item.match_type}`);
-  }
-
-  if (item.projection_fit && item.projection_fit !== "unknown") {
-    const map = {
-      low: "легкий",
-      medium: "помірний",
-      strong: "виразний шлейф",
-    };
-    parts.push(`🌬 Шлейф: ${map[item.projection_fit] || item.projection_fit}`);
-  }
-
-  if (item.longevity_fit && item.longevity_fit !== "unknown") {
-    const map = {
-      low: "легка стійкість",
-      medium: "середня стійкість",
-      long: "хороша стійкість",
-    };
-    parts.push(`⏳ Стійкість: ${map[item.longevity_fit] || item.longevity_fit}`);
-  }
-
-  if (Array.isArray(item.best_for_gpt) && item.best_for_gpt.length) {
-    parts.push(`📍 Найкраще для: ${item.best_for_gpt.join(", ")}`);
-  }
-
-  if (typeof item.confidence === "number") {
-    parts.push(`📊 Впевненість: ${Math.round(item.confidence * 100)}%`);
-  }
-
-  return parts.length ? `\n\n${parts.join("\n")}` : "";
+function renderMetaComment() {
+  return "";
 }
 
 function hasSearchData(analysis) {
@@ -219,26 +181,27 @@ function hasSearchData(analysis) {
 
 function buildPayloadWithExplanations(item) {
   const why = Array.isArray(item.why_selected) ? item.why_selected : [];
-  const assistantComment = String(item.assistant_comment || "").trim();
 
-  const whyLines = why.length
-    ? why.slice(0, 3).map((x) => `• ${String(x || "").trim()}`).join("\n")
-    : "• близький за загальним характером\n• добре потрапляє в напрям запиту";
-
-  const commentBlock = assistantComment
-    ? `\n\n🗣 Порада:\n${assistantComment}`
-    : "";
-
-  const metaBlock = renderMetaComment(item);
-
-  const extraBlock =
-    `\n\n💡 Чому обрано:\n${whyLines}` +
-    commentBlock +
-    metaBlock;
+  const cleanWhy = why
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .slice(0, 2);
 
   return {
     ...item,
-    short_desc: `${String(item.short_desc || "").trim()}${extraBlock}`.trim(),
+    assistant_comment: "",
+    match_type: "",
+    confidence: null,
+    best_for_gpt: [],
+    projection_fit: "unknown",
+    longevity_fit: "unknown",
+    short_desc: [
+      String(item.short_desc || "").trim(),
+      cleanWhy.length ? `💡 Чому обрано:\n• ${cleanWhy.join("\n• ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+      .trim(),
   };
 }
 
