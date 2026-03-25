@@ -5,7 +5,6 @@ const { normalizePhone } = require("../utils/phone");
 const { adminMenuKeyboard } = require("../ui/keyboards");
 
 const adminState = new Map();
-// tgId -> { step, role, phone }
 
 function getTgId(ctx) {
   return ctx.from?.id;
@@ -69,8 +68,7 @@ async function onAdminAction(ctx, action) {
         arr
           .map((u, i) => {
             const fio = u.fio || "без ФІО";
-            const tg = renderTgWithCount(u);
-            return `${i + 1}. ${u.phone} — ${fio}${tg}`;
+            return `${i + 1}. ${u.phone} — ${fio}${renderTgWithCount(u)}`;
           })
           .join("\n");
 
@@ -89,8 +87,7 @@ async function onAdminAction(ctx, action) {
         arr
           .map((u, i) => {
             const fio = u.fio || "без ФІО";
-            const tg = renderTgWithCount(u);
-            return `${i + 1}. ${u.phone} — ${fio}${tg}`;
+            return `${i + 1}. ${u.phone} — ${fio}${renderTgWithCount(u)}`;
           })
           .join("\n");
 

@@ -1,4 +1,4 @@
-const { SEARCH } = require("../config");
+const { SEARCH, ADMINS_PATH, USERS_PATH } = require("../config");
 const { PICK_MODE_HELP } = require("../ui/messages");
 
 const { analyzePerfumeIntent } = require("../llm/perfumeAnalyzer");
@@ -19,11 +19,32 @@ const {
 } = require("../search/catalogRepo");
 
 const { sendPerfumeCard } = require("./sendPerfumeCard");
+const adminsStore = require("../storage/adminsStore");
+const usersStore = require("../storage/usersStore");
 
 const modeState = new Map();
 
 function getTgId(ctx) {
   return ctx.from?.id;
+}
+
+function incrementSearchCounterForActor(ctx) {
+  const tgId = Number(getTgId(ctx));
+  if (!tgId) return false;
+
+  const incAdmin =
+    typeof adminsStore.incrementSearchCountByTgId === "function"
+      ? adminsStore.incrementSearchCountByTgId(ADMINS_PATH, tgId, 1)
+      : false;
+
+  if (incAdmin) return true;
+
+  const incUser =
+    typeof usersStore.incrementSearchCountByTgId === "function"
+      ? usersStore.incrementSearchCountByTgId(USERS_PATH, tgId, 1)
+      : false;
+
+  return incUser;
 }
 
 function setMode(ctx, mode) {
@@ -714,9 +735,12 @@ async function onUserText(ctx) {
   if (!text) return true;
 
   const saved = getLastSearch(ctx);
-  if (isFollowupForMore(text, Boolean(saved))) {
-    return sendNextBatchFromState(ctx, saved, text);
-  }
+
+if (isFollowupForMore(text, Boolean(saved))) {
+  return sendNextBatchFromState(ctx, saved, text);
+}
+
+incrementSearchCounterForActor(ctx);
 
   const exactByName = findByExactName(text);
   if (exactByName) {

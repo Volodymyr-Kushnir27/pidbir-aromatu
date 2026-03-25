@@ -1,47 +1,28 @@
 const { buildPerfumeCaption } = require("../ui/formatPerfumeCard");
 const { perfumeCardKeyboard } = require("../ui/keyboards");
 
-const TELEGRAM_CAPTION_LIMIT = 1024;
-const SAFE_CAPTION_LIMIT = 950;
+const SAFE_CAPTION_LIMIT = 900;
 
-function normalizeText(s) {
-  return String(s || "")
-    .replace(/\r/g, "")
-    .replace(/\u0000/g, "")
-    .trim();
+function cleanText(text) {
+  return String(text || "").replace(/\r/g, "").replace(/\u0000/g, "").trim();
 }
 
-function splitLongText(text, limit = 3500) {
-  const clean = normalizeText(text);
-  if (!clean) return [];
-
-  if (clean.length <= limit) return [clean];
-
-  const parts = [];
-  let rest = clean;
-
-  while (rest.length > limit) {
-    let cut = rest.lastIndexOf("\n", limit);
-    if (cut < 500) cut = rest.lastIndexOf(". ", limit);
-    if (cut < 300) cut = rest.lastIndexOf(" ", limit);
-    if (cut < 1) cut = limit;
-
-    parts.push(rest.slice(0, cut).trim());
-    rest = rest.slice(cut).trim();
-  }
-
-  if (rest) parts.push(rest);
-  return parts.filter(Boolean);
+function trimText(text, max) {
+  const clean = cleanText(text);
+  if (!clean) return "";
+  if (clean.length <= max) return clean;
+  return `${clean.slice(0, max - 1).trim()}…`;
 }
 
 function buildShortCaption(item, options = {}) {
   const name = String(item?.name || "Без назви").trim();
   const code = String(item?.number_code || "—").trim();
-  const gender = String(item?.gender || item?.for_whom || "—").trim();
-  const category = String(item?.category || item?.type || "—").trim();
+  const type = String(item?.type || item?.category || "—").trim();
+  const gender = String(item?.for_whom || item?.gender || "—").trim();
+  const season = options?.season ? String(item?.season || "").trim() : "";
 
   const notesRaw = String(item?.notes || "").trim();
-  const shortNotes = notesRaw
+  const notes = notesRaw
     ? notesRaw
         .split(/[;,]/)
         .map((x) => x.trim())
@@ -50,12 +31,10 @@ function buildShortCaption(item, options = {}) {
         .join(", ")
     : "";
 
-  const season = options?.season ? String(item?.season || "").trim() : "";
-
   const lines = [
     `**${name}**`,
     `🔢 Код: ${code}`,
-    `🧴 Тип: ${category}`,
+    `🧴 Тип: ${type}`,
     `👤 Для кого: ${gender}`,
   ];
 
@@ -63,21 +42,14 @@ function buildShortCaption(item, options = {}) {
     lines.push(`🍂 Сезон: ${season}`);
   }
 
-  if (shortNotes) {
-    lines.push(`🌿 Ноти: ${shortNotes}`);
+  if (notes) {
+    lines.push(`🌿 Ноти: ${notes}`);
   }
 
-  return normalizeText(lines.join("\n")).slice(0, SAFE_CAPTION_LIMIT);
+  return trimText(lines.join("\n"), SAFE_CAPTION_LIMIT);
 }
 
-function trimCaption(text, max = SAFE_CAPTION_LIMIT) {
-  const clean = normalizeText(text);
-  if (!clean) return "";
-  if (clean.length <= max) return clean;
-  return `${clean.slice(0, max - 1).trim()}…`;
-}
-
-async function tryReplyWithPhoto(ctx, photo, caption, keyboard) {
+async function replyWithPhotoSafe(ctx, photo, caption, keyboard) {
   try {
     return await ctx.replyWithPhoto(
       { url: photo },
@@ -102,60 +74,27 @@ async function tryReplyWithPhoto(ctx, photo, caption, keyboard) {
 }
 
 async function sendPerfumeCard(ctx, item, options = {}) {
-  const fullCaption = normalizeText(buildPerfumeCaption(item, options));
-  const shortCaptionBase = buildShortCaption(item, options);
-  const shortCaption = trimCaption(
-    shortCaptionBase || fullCaption,
-    SAFE_CAPTION_LIMIT,
-  );
-
-  const photo = item.image_url || item.photo || null;
+  const fullCaption = cleanText(buildPerfumeCaption(item, options));
+  const shortCaption = buildShortCaption(item, options);
   const keyboard = perfumeCardKeyboard(item);
+  const photo = item?.image_url || item?.photo || null;
 
-  const fullParts = splitLongText(fullCaption, 3500);
-  const needSeparateText =
-    fullCaption.length > TELEGRAM_CAPTION_LIMIT ||
-    fullCaption !== shortCaption;
-
-  if (photo) {
-    const photoMsg = await tryReplyWithPhoto(ctx, photo, shortCaption, keyboard);
-
-    if (photoMsg) {
-      if (needSeparateText) {
-        for (const part of fullParts) {
-          await ctx.reply(part);
-        }
-      }
-      return photoMsg;
-    }
-  }
-
-  if (!fullParts.length) {
-    return ctx.reply("🧴 Аромат знайдено.", {
-      reply_markup: keyboard?.reply_markup,
-    });
-  }
-
-  const first = await ctx.reply(fullParts[0], {
-    reply_markup: keyboard?.reply_markup,
+  console.log("CARD DEBUG", {
+    id: item?.id,
+    name: item?.name,
+    hasPhoto: Boolean(photo),
+    fullCaptionLength: fullCaption.length,
+    shortCaptionLength: shortCaption.length,
   });
 
-  if (fullParts.length > 1) {
-    for (const part of fullParts.slice(1)) {
-      await ctx.reply(part);
-    }
+  if (photo) {
+    const photoMsg = await replyWithPhotoSafe(ctx, photo, shortCaption, keyboard);
+    if (photoMsg) return photoMsg;
   }
-  
-console.log("CARD DEBUG", {
-  id: item?.id,
-  name: item?.name,
-  hasPhoto: Boolean(photo),
-  photo: photo || null,
-  fullCaptionLength: fullCaption.length,
-  shortCaptionLength: shortCaption.length,
-});
 
-  return first;
+  return ctx.reply(fullCaption || shortCaption || "🧴 Аромат знайдено.", {
+    reply_markup: keyboard?.reply_markup,
+  });
 }
 
 module.exports = { sendPerfumeCard };

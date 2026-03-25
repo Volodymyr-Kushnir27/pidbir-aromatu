@@ -81,7 +81,6 @@ function incrementSearchCountByTgId(path, tgIdRaw, step = 1) {
   if (idx === -1) return false;
 
   arr[idx].search_count = Number(arr[idx].search_count || 0) + Number(step || 1);
-
   writeJSON(path, arr);
   return true;
 }
