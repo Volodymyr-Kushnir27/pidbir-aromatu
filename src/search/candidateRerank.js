@@ -9,7 +9,7 @@ function normalizeGenderValue(value) {
 
   if (!g) return "unknown";
 
-  // 1. Спочатку unisex
+  // 1. Спочатку unisex, щоб "unisex for women/men" не ламався
   if (
     g.includes("унісекс") ||
     g.includes("унисекс") ||
@@ -89,15 +89,19 @@ function rerankTopK(candidates, profile, targetName = "", topK = 3, offset = 0) 
   }
 
   filtered.sort((a, b) => {
-    if (a._gender_bucket !== b._gender_bucket) {
-      return a._gender_bucket - b._gender_bucket;
-    }
-
     const aScore = Number(a.match_score || 0);
     const bScore = Number(b.match_score || 0);
 
+    // ГОЛОВНИЙ ПРІОРИТЕТ — схожість аромату:
+    // ноти, акорди, опис, keywords, стиль.
     if (aScore !== bScore) {
       return bScore - aScore;
+    }
+
+    // Стать — тільки тайбрейкер, якщо схожість однакова.
+    // Тобто якщо unisex має кращий match_score, він буде вище жіночого/чоловічого.
+    if (a._gender_bucket !== b._gender_bucket) {
+      return a._gender_bucket - b._gender_bucket;
     }
 
     return Number(a.id || 0) - Number(b.id || 0);
