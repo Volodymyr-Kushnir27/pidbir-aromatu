@@ -273,8 +273,6 @@ function buildFtsMatchQuery(input) {
 
   if (!terms.length) return "";
 
-  // OR краще для коротких direct-запитів і alias-наборів:
-  // ["лакоста", "лакост", "lacoste"] → лакоста* OR лакост* OR lacoste*
   return terms.map((t) => `${t}*`).join(" OR ");
 }
 
@@ -366,7 +364,7 @@ function findWeightedFtsCandidates(query, limit = 120) {
           p.description,
           p.quote,
           CAST(10000 - (bm25(
-            f,
+            perfumes_fts,
             9.0,  -- name
             6.0,  -- number_code
             5.0,  -- number_codes
@@ -380,11 +378,11 @@ function findWeightedFtsCandidates(query, limit = 120) {
             2.0   -- occasion
           ) * 1000) AS INTEGER) AS sql_score,
           'fts' AS sql_field
-        FROM perfumes_fts f
-        JOIN perfumes p ON p.id = f.rowid
+        FROM perfumes_fts
+        JOIN perfumes p ON p.id = perfumes_fts.rowid
         WHERE perfumes_fts MATCH @match
         ORDER BY bm25(
-          f,
+          perfumes_fts,
           9.0,
           6.0,
           5.0,
@@ -613,8 +611,10 @@ function rebuildPerfumesFts() {
     PRAGMA optimize;
   `);
 
-  const perfumesCount = db.prepare(`SELECT COUNT(*) AS count FROM perfumes`).get()?.count || 0;
-  const ftsCount = db.prepare(`SELECT COUNT(*) AS count FROM perfumes_fts`).get()?.count || 0;
+  const perfumesCount =
+    db.prepare(`SELECT COUNT(*) AS count FROM perfumes`).get()?.count || 0;
+  const ftsCount =
+    db.prepare(`SELECT COUNT(*) AS count FROM perfumes_fts`).get()?.count || 0;
 
   return {
     perfumesCount,

@@ -4,7 +4,7 @@ const { findWeightedTextCandidates } = require("./catalogRepo");
  * Direct search по назві / keywords / version / description / notes.
  *
  * Швидка версія:
- * 1. Спочатку SQLite FTS/LIKE відбирає 50-150 кандидатів.
+ * 1. Спочатку SQLite FTS/LIKE відбирає 50-120 кандидатів.
  * 2. JS fuzzy/scoring працює тільки по цих кандидатах.
  * 3. Не перебираємо всю БД у Node.js.
  */
@@ -444,43 +444,36 @@ function scoreField(fieldValue, query, fieldWeight) {
 function scorePerfume(item, query) {
   const fields = [
     {
-      key: "name",
       label: "назва",
       value: item.name,
       weight: 700,
     },
     {
-      key: "keywords",
       label: "ключові слова",
       value: item.keywords,
       weight: 650,
     },
     {
-      key: "version",
       label: "версія",
       value: item.version,
       weight: 500,
     },
     {
-      key: "number_code",
       label: "код",
       value: item.number_code,
       weight: 450,
     },
     {
-      key: "number_codes",
       label: "коди",
       value: item.number_codes,
       weight: 400,
     },
     {
-      key: "description",
       label: "опис",
       value: item.description || item.short_desc,
       weight: 250,
     },
     {
-      key: "notes",
       label: "ноти",
       value: item.notes,
       weight: 220,
@@ -489,7 +482,7 @@ function scorePerfume(item, query) {
 
   let best = {
     score: Number(item.sql_score || 0),
-    reason: item.sql_field ? `збіг через швидкий SQL/FTS-пошук` : "",
+    reason: item.sql_field ? "збіг через швидкий SQL/FTS-пошук" : "",
     field: item.sql_field || "",
     type: item.sql_field ? "sql_prefilter" : "",
   };
@@ -617,8 +610,6 @@ function hasStrongDirectMatch(items = []) {
     return score >= 7000;
   }
 
-  // FTS/SQL без точного JS-збігу не вважаємо 100% сильним,
-  // але залишаємо у результатах, якщо інші кандидати є.
   return false;
 }
 
