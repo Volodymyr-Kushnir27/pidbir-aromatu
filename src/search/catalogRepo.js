@@ -1,5 +1,23 @@
 const db = require("../db/catalogDb");
 
+const PERFUME_SELECT_COLUMNS = `
+  id,
+  photo,
+  name,
+  number_code,
+  number_codes,
+  type,
+  for_whom,
+  season,
+  occasion,
+  age,
+  notes,
+  keywords,
+  version,
+  description,
+  quote
+`;
+
 function normalizeCode(input) {
   return String(input || "")
     .toUpperCase()
@@ -20,7 +38,21 @@ function normalizeCode(input) {
 function normalizeName(input) {
   return String(input || "")
     .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/ґ/g, "г")
     .replace(/["'`"]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeSearchText(input) {
+  return String(input || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/ґ/g, "г")
+    .replace(/[’‘“”"«»`]/g, " ")
+    .replace(/&/g, " and ")
+    .replace(/[^a-zа-яіїє0-9]+/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -59,28 +91,16 @@ function mapRow(row) {
     short_desc: row.description || "",
 
     quote: row.quote || "",
+
+    sql_score: row.sql_score ?? null,
+    sql_field: row.sql_field || "",
   };
 }
 
 function getAllPerfumes(limit = 1000) {
   const rows = db
     .prepare(`
-      SELECT
-        id,
-        photo,
-        name,
-        number_code,
-        number_codes,
-        type,
-        for_whom,
-        season,
-        occasion,
-        age,
-        notes,
-        keywords,
-        version,
-        description,
-        quote
+      SELECT ${PERFUME_SELECT_COLUMNS}
       FROM perfumes
       LIMIT ?
     `)
@@ -92,22 +112,7 @@ function getAllPerfumes(limit = 1000) {
 function getPerfumeById(id) {
   const row = db
     .prepare(`
-      SELECT
-        id,
-        photo,
-        name,
-        number_code,
-        number_codes,
-        type,
-        for_whom,
-        season,
-        occasion,
-        age,
-        notes,
-        keywords,
-        version,
-        description,
-        quote
+      SELECT ${PERFUME_SELECT_COLUMNS}
       FROM perfumes
       WHERE id = ?
       LIMIT 1
@@ -122,22 +127,7 @@ function findByNameLike(text, limit = 20) {
 
   const rows = db
     .prepare(`
-      SELECT
-        id,
-        photo,
-        name,
-        number_code,
-        number_codes,
-        type,
-        for_whom,
-        season,
-        occasion,
-        age,
-        notes,
-        keywords,
-        version,
-        description,
-        quote
+      SELECT ${PERFUME_SELECT_COLUMNS}
       FROM perfumes
       WHERE LOWER(name) LIKE LOWER(?)
       LIMIT ?
@@ -153,22 +143,7 @@ function findByExactName(text) {
 
   const rows = db
     .prepare(`
-      SELECT
-        id,
-        photo,
-        name,
-        number_code,
-        number_codes,
-        type,
-        for_whom,
-        season,
-        occasion,
-        age,
-        notes,
-        keywords,
-        version,
-        description,
-        quote
+      SELECT ${PERFUME_SELECT_COLUMNS}
       FROM perfumes
     `)
     .all()
@@ -199,22 +174,7 @@ function splitCodes(value) {
 function getAllWithCodes() {
   const rows = db
     .prepare(`
-      SELECT
-        id,
-        photo,
-        name,
-        number_code,
-        number_codes,
-        type,
-        for_whom,
-        season,
-        occasion,
-        age,
-        notes,
-        keywords,
-        version,
-        description,
-        quote
+      SELECT ${PERFUME_SELECT_COLUMNS}
       FROM perfumes
       WHERE (number_code IS NOT NULL AND TRIM(number_code) <> '')
          OR (number_codes IS NOT NULL AND TRIM(number_codes) <> '')
@@ -266,6 +226,402 @@ function findAllByNumericCode(input) {
   return [...uniqMap.values()];
 }
 
+/* =========================
+   Fast text / FTS search
+========================= */
+
+function hasPerfumesFts() {
+  const row = db
+    .prepare(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'table'
+        AND name = 'perfumes_fts'
+      LIMIT 1
+    `)
+    .get();
+
+  return Boolean(row);
+}
+
+function escapeFtsToken(token) {
+  return normalizeSearchText(token)
+    .split(/\s+/)
+    .join(" ")
+    .replace(/"/g, "");
+}
+
+function uniqStrings(arr = []) {
+  return [
+    ...new Set(
+      (arr || [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function buildFtsMatchQuery(input) {
+  const rawTerms = Array.isArray(input) ? input : [input];
+
+  const terms = uniqStrings(
+    rawTerms
+      .flatMap((x) => normalizeSearchText(x).split(/\s+/))
+      .map((x) => escapeFtsToken(x))
+      .filter((x) => x.length >= 2),
+  ).slice(0, 12);
+
+  if (!terms.length) return "";
+
+  // OR краще для коротких direct-запитів і alias-наборів:
+  // ["лакоста", "лакост", "lacoste"] → лакоста* OR лакост* OR lacoste*
+  return terms.map((t) => `${t}*`).join(" OR ");
+}
+
+function buildLikeTerms(input) {
+  const rawTerms = Array.isArray(input) ? input : [input];
+
+  return uniqStrings(
+    rawTerms
+      .flatMap((x) => normalizeSearchText(x).split(/\s+/))
+      .filter((x) => x.length >= 2),
+  ).slice(0, 8);
+}
+
+function findWeightedLikeCandidates(query, limit = 120) {
+  const terms = buildLikeTerms(query);
+  if (!terms.length) return [];
+
+  const whereParts = [];
+  const params = { limit: Number(limit) };
+
+  terms.forEach((term, idx) => {
+    const key = `q${idx}`;
+    params[key] = `%${term}%`;
+
+    whereParts.push(`
+      lower(coalesce(name, '')) LIKE @${key}
+      OR lower(coalesce(number_code, '')) LIKE @${key}
+      OR lower(coalesce(number_codes, '')) LIKE @${key}
+      OR lower(coalesce(type, '')) LIKE @${key}
+      OR lower(coalesce(for_whom, '')) LIKE @${key}
+      OR lower(coalesce(notes, '')) LIKE @${key}
+      OR lower(coalesce(keywords, '')) LIKE @${key}
+      OR lower(coalesce(description, '')) LIKE @${key}
+      OR lower(coalesce(version, '')) LIKE @${key}
+      OR lower(coalesce(season, '')) LIKE @${key}
+      OR lower(coalesce(occasion, '')) LIKE @${key}
+    `);
+  });
+
+  const sql = `
+    SELECT
+      ${PERFUME_SELECT_COLUMNS},
+      CASE
+        WHEN ${terms.map((_, i) => `lower(coalesce(name, '')) LIKE @q${i}`).join(" OR ")} THEN 10000
+        WHEN ${terms.map((_, i) => `lower(coalesce(keywords, '')) LIKE @q${i}`).join(" OR ")} THEN 8500
+        WHEN ${terms.map((_, i) => `lower(coalesce(notes, '')) LIKE @q${i}`).join(" OR ")} THEN 8000
+        WHEN ${terms.map((_, i) => `lower(coalesce(version, '')) LIKE @q${i}`).join(" OR ")} THEN 6500
+        WHEN ${terms.map((_, i) => `lower(coalesce(description, '')) LIKE @q${i}`).join(" OR ")} THEN 5000
+        ELSE 3000
+      END AS sql_score,
+      CASE
+        WHEN ${terms.map((_, i) => `lower(coalesce(name, '')) LIKE @q${i}`).join(" OR ")} THEN 'name'
+        WHEN ${terms.map((_, i) => `lower(coalesce(keywords, '')) LIKE @q${i}`).join(" OR ")} THEN 'keywords'
+        WHEN ${terms.map((_, i) => `lower(coalesce(notes, '')) LIKE @q${i}`).join(" OR ")} THEN 'notes'
+        WHEN ${terms.map((_, i) => `lower(coalesce(version, '')) LIKE @q${i}`).join(" OR ")} THEN 'version'
+        WHEN ${terms.map((_, i) => `lower(coalesce(description, '')) LIKE @q${i}`).join(" OR ")} THEN 'description'
+        ELSE 'text'
+      END AS sql_field
+    FROM perfumes
+    WHERE ${whereParts.map((x) => `(${x})`).join(" OR ")}
+    ORDER BY sql_score DESC, id ASC
+    LIMIT @limit
+  `;
+
+  return db.prepare(sql).all(params).map(mapRow);
+}
+
+function findWeightedFtsCandidates(query, limit = 120) {
+  const match = buildFtsMatchQuery(query);
+  if (!match) return [];
+
+  try {
+    const rows = db
+      .prepare(`
+        SELECT
+          p.id,
+          p.photo,
+          p.name,
+          p.number_code,
+          p.number_codes,
+          p.type,
+          p.for_whom,
+          p.season,
+          p.occasion,
+          p.age,
+          p.notes,
+          p.keywords,
+          p.version,
+          p.description,
+          p.quote,
+          CAST(10000 - (bm25(
+            f,
+            9.0,  -- name
+            6.0,  -- number_code
+            5.0,  -- number_codes
+            4.0,  -- type
+            2.0,  -- for_whom
+            8.0,  -- notes
+            8.0,  -- keywords
+            3.0,  -- description
+            6.0,  -- version
+            2.0,  -- season
+            2.0   -- occasion
+          ) * 1000) AS INTEGER) AS sql_score,
+          'fts' AS sql_field
+        FROM perfumes_fts f
+        JOIN perfumes p ON p.id = f.rowid
+        WHERE perfumes_fts MATCH @match
+        ORDER BY bm25(
+          f,
+          9.0,
+          6.0,
+          5.0,
+          4.0,
+          2.0,
+          8.0,
+          8.0,
+          3.0,
+          6.0,
+          2.0,
+          2.0
+        ) ASC
+        LIMIT @limit
+      `)
+      .all({
+        match,
+        limit: Number(limit),
+      });
+
+    return rows.map(mapRow);
+  } catch (e) {
+    console.error("[catalogRepo] FTS search failed, fallback to LIKE", {
+      query,
+      match,
+      error: e?.message || String(e),
+    });
+
+    return findWeightedLikeCandidates(query, limit);
+  }
+}
+
+function findWeightedTextCandidates(query, limit = 120) {
+  if (!query || (Array.isArray(query) && !query.length)) return [];
+
+  if (hasPerfumesFts()) {
+    return findWeightedFtsCandidates(query, limit);
+  }
+
+  return findWeightedLikeCandidates(query, limit);
+}
+
+function rebuildPerfumesFts() {
+  db.exec(`
+    DROP TRIGGER IF EXISTS perfumes_ai_fts;
+    DROP TRIGGER IF EXISTS perfumes_ad_fts;
+    DROP TRIGGER IF EXISTS perfumes_au_fts;
+    DROP TABLE IF EXISTS perfumes_fts;
+
+    CREATE VIRTUAL TABLE perfumes_fts USING fts5(
+      name,
+      number_code,
+      number_codes,
+      type,
+      for_whom,
+      notes,
+      keywords,
+      description,
+      version,
+      season,
+      occasion,
+      content='perfumes',
+      content_rowid='id',
+      tokenize='unicode61 remove_diacritics 2'
+    );
+
+    INSERT INTO perfumes_fts(
+      rowid,
+      name,
+      number_code,
+      number_codes,
+      type,
+      for_whom,
+      notes,
+      keywords,
+      description,
+      version,
+      season,
+      occasion
+    )
+    SELECT
+      id,
+      coalesce(name, ''),
+      coalesce(number_code, ''),
+      coalesce(number_codes, ''),
+      coalesce(type, ''),
+      coalesce(for_whom, ''),
+      coalesce(notes, ''),
+      coalesce(keywords, ''),
+      coalesce(description, ''),
+      coalesce(version, ''),
+      coalesce(season, ''),
+      coalesce(occasion, '')
+    FROM perfumes;
+
+    CREATE TRIGGER perfumes_ai_fts AFTER INSERT ON perfumes BEGIN
+      INSERT INTO perfumes_fts(
+        rowid,
+        name,
+        number_code,
+        number_codes,
+        type,
+        for_whom,
+        notes,
+        keywords,
+        description,
+        version,
+        season,
+        occasion
+      )
+      VALUES (
+        new.id,
+        coalesce(new.name, ''),
+        coalesce(new.number_code, ''),
+        coalesce(new.number_codes, ''),
+        coalesce(new.type, ''),
+        coalesce(new.for_whom, ''),
+        coalesce(new.notes, ''),
+        coalesce(new.keywords, ''),
+        coalesce(new.description, ''),
+        coalesce(new.version, ''),
+        coalesce(new.season, ''),
+        coalesce(new.occasion, '')
+      );
+    END;
+
+    CREATE TRIGGER perfumes_ad_fts AFTER DELETE ON perfumes BEGIN
+      INSERT INTO perfumes_fts(
+        perfumes_fts,
+        rowid,
+        name,
+        number_code,
+        number_codes,
+        type,
+        for_whom,
+        notes,
+        keywords,
+        description,
+        version,
+        season,
+        occasion
+      )
+      VALUES (
+        'delete',
+        old.id,
+        coalesce(old.name, ''),
+        coalesce(old.number_code, ''),
+        coalesce(old.number_codes, ''),
+        coalesce(old.type, ''),
+        coalesce(old.for_whom, ''),
+        coalesce(old.notes, ''),
+        coalesce(old.keywords, ''),
+        coalesce(old.description, ''),
+        coalesce(old.version, ''),
+        coalesce(old.season, ''),
+        coalesce(old.occasion, '')
+      );
+    END;
+
+    CREATE TRIGGER perfumes_au_fts AFTER UPDATE ON perfumes BEGIN
+      INSERT INTO perfumes_fts(
+        perfumes_fts,
+        rowid,
+        name,
+        number_code,
+        number_codes,
+        type,
+        for_whom,
+        notes,
+        keywords,
+        description,
+        version,
+        season,
+        occasion
+      )
+      VALUES (
+        'delete',
+        old.id,
+        coalesce(old.name, ''),
+        coalesce(old.number_code, ''),
+        coalesce(old.number_codes, ''),
+        coalesce(old.type, ''),
+        coalesce(old.for_whom, ''),
+        coalesce(old.notes, ''),
+        coalesce(old.keywords, ''),
+        coalesce(old.description, ''),
+        coalesce(old.version, ''),
+        coalesce(old.season, ''),
+        coalesce(old.occasion, '')
+      );
+
+      INSERT INTO perfumes_fts(
+        rowid,
+        name,
+        number_code,
+        number_codes,
+        type,
+        for_whom,
+        notes,
+        keywords,
+        description,
+        version,
+        season,
+        occasion
+      )
+      VALUES (
+        new.id,
+        coalesce(new.name, ''),
+        coalesce(new.number_code, ''),
+        coalesce(new.number_codes, ''),
+        coalesce(new.type, ''),
+        coalesce(new.for_whom, ''),
+        coalesce(new.notes, ''),
+        coalesce(new.keywords, ''),
+        coalesce(new.description, ''),
+        coalesce(new.version, ''),
+        coalesce(new.season, ''),
+        coalesce(new.occasion, '')
+      );
+    END;
+
+    CREATE INDEX IF NOT EXISTS idx_perfumes_number_code ON perfumes(number_code);
+    CREATE INDEX IF NOT EXISTS idx_perfumes_name ON perfumes(name);
+    CREATE INDEX IF NOT EXISTS idx_perfumes_for_whom ON perfumes(for_whom);
+    CREATE INDEX IF NOT EXISTS idx_perfumes_type ON perfumes(type);
+
+    PRAGMA optimize;
+  `);
+
+  const perfumesCount = db.prepare(`SELECT COUNT(*) AS count FROM perfumes`).get()?.count || 0;
+  const ftsCount = db.prepare(`SELECT COUNT(*) AS count FROM perfumes_fts`).get()?.count || 0;
+
+  return {
+    perfumesCount,
+    ftsCount,
+  };
+}
+
 module.exports = {
   getAllPerfumes,
   getPerfumeById,
@@ -277,4 +633,10 @@ module.exports = {
   normalizeCode,
   extractNumericCode,
   normalizeName,
+
+  findWeightedTextCandidates,
+  findWeightedFtsCandidates,
+  findWeightedLikeCandidates,
+  hasPerfumesFts,
+  rebuildPerfumesFts,
 };
