@@ -1,82 +1,11 @@
 const { chatJSON } = require("./client");
 
 function uniq(arr = []) {
-  return [
-    ...new Set(
-      (arr || [])
-        .map((x) => String(x || "").trim())
-        .filter(Boolean),
-    ),
-  ];
+  return [...new Set((arr || []).map((x) => String(x || "").trim()).filter(Boolean))];
 }
 
 function clean(value) {
   return String(value || "").trim();
-}
-
-function pickData(analysis, webPerfumeData) {
-  const web = webPerfumeData || {};
-
-  return {
-    brand: clean(web.brand || analysis?.brand || ""),
-    target_name: clean(
-      web.target_name ||
-        web.normalized_name ||
-        analysis?.target_name ||
-        analysis?.normalized_query ||
-        analysis?.corrected_query ||
-        "цей аромат",
-    ),
-
-    description: clean(web.description || web.short_summary || ""),
-    gender: clean(web.gender || analysis?.gender || "unknown"),
-
-    seasons: uniq([...(web.seasons || []), ...(analysis?.seasons || [])]),
-    style: uniq([...(web.style || []), ...(analysis?.style || [])]),
-
-    notes_top: uniq([...(web.notes_top || []), ...(analysis?.notes_top || [])]),
-    notes_heart: uniq([
-      ...(web.notes_heart || []),
-      ...(analysis?.notes_heart || []),
-    ]),
-    notes_base: uniq([...(web.notes_base || []), ...(analysis?.notes_base || [])]),
-    accords: uniq([...(web.accords || []), ...(analysis?.accords || [])]),
-
-    search_terms: uniq([
-      ...(web.search_terms || []),
-      ...(analysis?.search_terms || []),
-    ]),
-
-    best_for: uniq([
-      ...(web.best_for || []),
-      ...(analysis?.intent_context?.best_for || []),
-    ]),
-
-    projection:
-      web.projection ||
-      analysis?.intent_context?.projection ||
-      analysis?.projection ||
-      "unknown",
-
-    longevity:
-      web.longevity ||
-      analysis?.intent_context?.longevity ||
-      analysis?.longevity ||
-      "unknown",
-
-    age_group:
-      web.age_group ||
-      analysis?.intent_context?.age_group ||
-      analysis?.age_group ||
-      "unknown",
-
-    image_style: uniq([
-      ...(web.image_style || []),
-      ...(analysis?.intent_context?.image_style || []),
-    ]),
-
-    source_urls: uniq(web.source_urls || []),
-  };
 }
 
 function humanGender(gender) {
@@ -84,145 +13,101 @@ function humanGender(gender) {
   if (g === "male") return "чоловіків";
   if (g === "female") return "жінок";
   if (g === "unisex") return "унісекс";
-  return "тих, кому подобається такий напрям";
+  return "тих, кому подобається цей напрям";
 }
 
 function humanProjection(value) {
   const v = clean(value).toLowerCase();
-  if (v === "strong") return "виразний / помітний";
+  if (v === "strong") return "виразний";
   if (v === "medium") return "середній";
   if (v === "low") return "делікатний";
-  return "залежить від шкіри та концентрації";
+  return "орієнтовно середній";
 }
 
 function humanLongevity(value) {
   const v = clean(value).toLowerCase();
-  if (v === "long") return "добра / тривала";
+  if (v === "long") return "добра";
   if (v === "medium") return "середня";
   if (v === "low") return "легка";
-  return "залежить від шкіри та погоди";
+  return "орієнтовно середня";
 }
 
-function buildFallbackIntro(analysis, webPerfumeData) {
-  const data = pickData(analysis, webPerfumeData);
+function buildFallbackIntro(analysis) {
+  const brand = clean(analysis?.brand);
+  const name = clean(analysis?.target_name || analysis?.normalized_query || analysis?.corrected_query || "цей аромат");
+  const title = brand && name && !name.toLowerCase().includes(brand.toLowerCase())
+    ? `${brand} ${name}`
+    : name;
 
-  const title =
-    data.brand &&
-    data.target_name &&
-    !data.target_name.toLowerCase().includes(data.brand.toLowerCase())
-      ? `${data.brand} ${data.target_name}`
-      : data.target_name;
+  const top = uniq(analysis?.notes_top).slice(0, 5);
+  const heart = uniq(analysis?.notes_heart).slice(0, 5);
+  const base = uniq(analysis?.notes_base).slice(0, 5);
+  const accords = uniq([...(analysis?.accords || []), ...(analysis?.style || [])]).slice(0, 7);
+  const seasons = uniq(analysis?.seasons).slice(0, 4);
+  const bestFor = uniq(analysis?.intent_context?.best_for || []).slice(0, 4);
+  const image = uniq(analysis?.intent_context?.image_style || []).slice(0, 4);
 
-  const notesTop = data.notes_top.slice(0, 5);
-  const notesHeart = data.notes_heart.slice(0, 5);
-  const notesBase = data.notes_base.slice(0, 5);
-  const accords = uniq([...data.accords, ...data.style]).slice(0, 8);
-  const bestFor = data.best_for.slice(0, 4);
-  const image = data.image_style.slice(0, 4);
+  const out = [];
 
-  const lines = [];
+  out.push(`Привіт! ✨ Орієнтир — ${title}.`);
 
-  lines.push(`Привіт! ✨ Орієнтир — **${title}**.`);
-
-  if (data.description) {
-    lines.push(`\n${data.description}`);
+  if (analysis?.description) {
+    out.push(`\n${clean(analysis.description)}`);
   } else if (accords.length) {
-    lines.push(`\nЗа характером це напрям: ${accords.join(", ")}.`);
+    out.push(`\nЦе аромат у напрямі: ${accords.join(", ")}.`);
   }
 
-  const noteLines = [];
-  if (notesTop.length) noteLines.push(`• старт: ${notesTop.join(", ")}`);
-  if (notesHeart.length) noteLines.push(`• серце: ${notesHeart.join(", ")}`);
-  if (notesBase.length) noteLines.push(`• база: ${notesBase.join(", ")}`);
+  const notes = [];
+  if (top.length) notes.push(`• старт: ${top.join(", ")}`);
+  if (heart.length) notes.push(`• серце: ${heart.join(", ")}`);
+  if (base.length) notes.push(`• база: ${base.join(", ")}`);
 
-  if (noteLines.length) {
-    lines.push(`\n🌿 Ноти:\n${noteLines.join("\n")}`);
-  }
+  if (notes.length) out.push(`\n🌿 Ноти:\n${notes.join("\n")}`);
 
-  lines.push(`\n👤 Для кого: ${humanGender(data.gender)}.`);
+  out.push(`\n👤 Для кого: ${humanGender(analysis?.gender)}.`);
 
-  if (bestFor.length) {
-    lines.push(`🕯 Коли носити: ${bestFor.join(", ")}.`);
-  }
+  if (bestFor.length) out.push(`🕯 Коли носити: ${bestFor.join(", ")}.`);
+  if (seasons.length) out.push(`🍂 Сезон: ${seasons.join(", ")}.`);
+  if (image.length) out.push(`🎭 Вайб: ${image.join(", ")}.`);
 
-  if (data.seasons.length) {
-    lines.push(`🍂 Сезон: ${data.seasons.slice(0, 4).join(", ")}.`);
-  }
-
-  if (image.length) {
-    lines.push(`🎭 Вайб: ${image.join(", ")}.`);
-  }
-
-  lines.push(
-    `🌫 Шлейф: ${humanProjection(data.projection)}. Стійкість: ${humanLongevity(
-      data.longevity,
-    )}.`,
+  out.push(
+    `🌫 Шлейф: ${humanProjection(analysis?.intent_context?.projection)}. ` +
+      `Стійкість: ${humanLongevity(analysis?.intent_context?.longevity)}.`,
   );
 
-  lines.push(
-    `\nЗараз підберу з бази найближчі варіанти за нотами, акордами й загальним характером.`,
-  );
+  out.push(`\nЗараз підберу з бази найближчі варіанти за нотами, акордами й загальним характером.`);
 
-  return lines.join("\n");
+  return out.join("\n");
 }
 
-async function writeReferencePerfumeIntro({ userText, analysis, webPerfumeData }) {
-  const data = pickData(analysis, webPerfumeData);
-
+async function writeReferencePerfumeIntro({ userText, analysis }) {
   const system = `
 Ти парфумерний консультант Telegram-бота.
 
-Твоє завдання:
-написати користувачу красивий, але конкретний опис зовнішнього аромату-орієнтира українською.
+Поверни JSON:
+{ "intro_text": "" }
 
-Поверни ТІЛЬКИ JSON:
-{
-  "intro_text": ""
-}
+Задача:
+написати повний опис зовнішнього аромату-орієнтира українською.
 
 КРИТИЧНО:
-- НІКОЛИ не пиши: "не знайшов", "на жаль", "спробуйте щось інше", "аромат відсутній".
-- Навіть якщо аромату немає в нашій БД, описуй його як ОРІЄНТИР для підбору.
-- Якщо є webPerfumeData — спирайся саме на нього.
-- Якщо webPerfumeData неповний — використовуй analysis.
-- Не вигадуй бренд, якщо його немає, але можеш описати напрям за наявними нотами.
-- Після опису обов'язково скажи, що зараз підбереш схожі варіанти з бази.
-
-Структура intro_text:
-1. "Привіт! Сьогодні говоримо про аромат..."
-2. 2–4 речення: що це за аромат і як він звучить.
-3. Блок нот:
-   - старт / верхні ноти
-   - серце
-   - база
-4. Кому підходить: чоловічий / жіночий / унісекс / вік / стиль.
-5. Коли носити: сезон / день / вечір / побачення / офіс.
-6. Шлейф і стійкість: якщо точних даних немає — обережно: "орієнтовно", "за характером".
-7. Фінал: "Зараз підберу схожі варіанти з бази..."
-
-Стиль:
-- Українська мова.
-- Не більше 1400 символів.
-- Без markdown-таблиць.
-- Можна 3–6 емодзі.
-- Пиши як консультант, не як технічний JSON.
+- Ніколи не пиши "не знайшов", "на жаль", "спробуйте інше".
+- Навіть якщо аромату немає в нашій БД, описуй його як орієнтир.
+- Обов'язково включи:
+  1. що це за аромат
+  2. ноти
+  3. кому підходить
+  4. сезон / випадок
+  5. шлейф
+  6. стійкість
+  7. перехід до підбору схожих з бази
+- До 1400 символів.
 `;
-
-  const user = JSON.stringify(
-    {
-      userText,
-      perfume_data: data,
-      webPerfumeData: webPerfumeData || null,
-      analysis: analysis || null,
-    },
-    null,
-    2,
-  );
 
   try {
     const json = await chatJSON({
       system,
-      user,
+      user: JSON.stringify({ userText, analysis }, null, 2),
       temperature: 0.35,
     });
 
@@ -230,9 +115,7 @@ async function writeReferencePerfumeIntro({ userText, analysis, webPerfumeData }
 
     if (
       intro &&
-      !/не\s+знайш(ов|ла|ли)|на\s+жаль|спробуйте\s+щось\s+інше|попробуйте\s+что|відсутн/i.test(
-        intro,
-      )
+      !/не\s+знайш|на\s+жаль|спробуйте\s+щось\s+інше|відсутн/i.test(intro)
     ) {
       return intro;
     }
@@ -240,11 +123,10 @@ async function writeReferencePerfumeIntro({ userText, analysis, webPerfumeData }
     console.error("writeReferencePerfumeIntro error:", e?.message || e);
   }
 
-  return buildFallbackIntro(analysis, webPerfumeData);
+  return buildFallbackIntro(analysis);
 }
 
 module.exports = {
   writeReferencePerfumeIntro,
   buildFallbackIntro,
-  pickData,
 };

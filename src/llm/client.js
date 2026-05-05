@@ -45,17 +45,16 @@ async function chatJSON({ system, user, temperature = 0.2 }) {
 }
 
 /**
- * Web-enabled JSON lookup через Responses API.
+ * JSON + web search через Responses API.
  *
- * В ENV можна задати:
- * OPENAI_WEB_MODEL=gpt-4.1-mini або gpt-5-mini
- * OPENAI_WEB_SEARCH_TOOL=web_search_preview або web_search
+ * ENV:
+ * OPENAI_WEB_MODEL=gpt-4.1-mini
+ * OPENAI_WEB_SEARCH_TOOL=web_search_preview
  *
- * Якщо tool name не підтримується у вашому акаунті/SDK,
- * функція пробує альтернативну назву.
+ * Якщо web_search_preview не підтримується — пробує web_search.
  */
 async function webJSON({ system, user, temperature = 0.15 }) {
-  const model = process.env.OPENAI_WEB_MODEL || CHAT_MODEL || "gpt-4.1-mini";
+  const model = process.env.OPENAI_WEB_MODEL || "gpt-4.1-mini";
   const preferredTool = process.env.OPENAI_WEB_SEARCH_TOOL || "web_search_preview";
   const fallbackTool = preferredTool === "web_search" ? "web_search_preview" : "web_search";
 
@@ -64,7 +63,7 @@ async function webJSON({ system, user, temperature = 0.15 }) {
       role: "system",
       content:
         `${system}\n\n` +
-        "Return ONLY valid JSON. No markdown. No code fences. No explanations outside JSON.",
+        "Return ONLY valid JSON. No markdown. No code fences. No text outside JSON.",
     },
     {
       role: "user",
@@ -72,7 +71,7 @@ async function webJSON({ system, user, temperature = 0.15 }) {
     },
   ];
 
-  async function runWithTool(toolType) {
+  async function run(toolType) {
     return openai.responses.create({
       model,
       temperature,
@@ -84,12 +83,12 @@ async function webJSON({ system, user, temperature = 0.15 }) {
   let resp;
 
   try {
-    resp = await runWithTool(preferredTool);
+    resp = await run(preferredTool);
   } catch (e1) {
     try {
-      resp = await runWithTool(fallbackTool);
+      resp = await run(fallbackTool);
     } catch (e2) {
-      console.error("webJSON responses error:", {
+      console.error("webJSON failed:", {
         preferredTool,
         fallbackTool,
         first: e1?.message || String(e1),

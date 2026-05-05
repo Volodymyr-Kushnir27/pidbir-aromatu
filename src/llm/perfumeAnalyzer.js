@@ -1,13 +1,18 @@
-const { chatJSON } = require("./client");
+const { chatJSON, webJSON } = require("./client");
 
 function uniq(arr = []) {
   return [...new Set((arr || []).map((x) => String(x || "").trim()).filter(Boolean))];
+}
+
+function clean(value) {
+  return String(value || "").trim();
 }
 
 function norm(s) {
   return String(s || "")
     .toLowerCase()
     .replace(/ё/g, "е")
+    .replace(/ґ/g, "г")
     .replace(/["'`’]/g, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -43,7 +48,7 @@ function containsReferenceIntent(text) {
   const t = norm(text);
 
   return (
-    /\b(схож(ий|е|і|а)|похож(ий|ее|ие|ая)|аналог|подобн(ый|ое|ые|ая)|like|similar|dupe|clone|inspired by)\b/i.test(
+    /\b(схож(ий|е|і|а)|похож(ий|ее|ие|ая)|аналог|подобн(ый|ое|ые|ая)|like|similar|dupe|clone|inspired by|типу|підбери|подбери)\b/i.test(
       t,
     ) ||
     /\b(користуюсь|пользуюсь|маю|есть|є|ношу|люблю|подобається|нравится)\b/i.test(t)
@@ -54,137 +59,10 @@ function containsStyleIntent(text) {
   const t = norm(text);
 
   return (
-    /\b(свіж|сладк|солодк|пряний|деревн|древесн|зелений|зелёный|морський|морской|чистий|чистый|дымн|димн|мускусн|цитрус|фрукт|квітк|цветоч|шкіря|кожан|офіс|вечір|вечер|побачення|свидание|на каждый день|щодня|лето|зима|осінь|весна|тютюн|табак|tobacco|перець|перец|pepper|персик|peach)\b/i.test(
+    /\b(свіж|сладк|солодк|пряний|деревн|древесн|зелений|зелёный|морський|морской|чистий|чистый|дымн|димн|мускусн|цитрус|фрукт|квітк|цветоч|шкіря|кожан|офіс|вечір|вечер|побачення|свидание|на каждый день|щодня|лето|зима|осінь|весна|тютюн|табак|tobacco|перець|перец|pepper|персик|peach|лимон|lemon|пиріг|pie|ваніль|vanilla|крем|cream|цукор|sugar|печиво|biscuit)\b/i.test(
       t,
     )
   );
-}
-
-/**
- * Жорсткий локальний словник.
- * Він спрацьовує ДО GPT, щоб бот не вигадував "аромат схожий на людину".
- */
-const KNOWN_REFERENCE_ALIASES = [
-  {
-    aliases: [
-      "діма білан",
-      "дима билан",
-      "dima bilan",
-      "bilan",
-      "білан",
-      "билан",
-      "excite by dima bilan",
-      "oriflame excite",
-      "ексайт білан",
-      "иксайт билан",
-    ],
-    analysis: {
-      found: true,
-      query_type: "reference_perfume",
-      target_name: "Excite by Dima Bilan",
-      brand: "Oriflame",
-      corrected_query: "Excite by Dima Bilan Oriflame",
-      translated_query: "Excite by Dima Bilan Oriflame",
-      normalized_query: "excite by dima bilan oriflame",
-      name_aliases: [
-        "діма білан",
-        "дима билан",
-        "dima bilan",
-        "excite",
-        "oriflame excite",
-        "excite by dima bilan",
-      ],
-      possible_names: [
-        "Excite by Dima Bilan",
-        "Oriflame Excite by Dima Bilan",
-      ],
-      gender: "male",
-      seasons: ["spring", "summer"],
-      style: ["fresh", "aquatic", "fougere", "fruity", "green", "musky", "woody"],
-      notes_top: ["bergamot", "melon", "quince", "wormwood"],
-      notes_heart: ["tea", "sea water", "tarragon"],
-      notes_base: ["musk", "cedar", "moss"],
-      accords: ["fresh", "aquatic", "fougere", "fruity", "green", "woody", "musky"],
-      search_terms: [
-        "excite",
-        "oriflame",
-        "dima bilan",
-        "діма білан",
-        "дима билан",
-        "бергамот",
-        "bergamot",
-        "диня",
-        "melon",
-        "айва",
-        "quince",
-        "полин",
-        "wormwood",
-        "чай",
-        "tea",
-        "морська вода",
-        "sea water",
-        "тархун",
-        "tarragon",
-        "мускус",
-        "musk",
-        "кедр",
-        "cedar",
-        "мох",
-        "moss",
-        "свіжий",
-        "fresh",
-        "водний",
-        "aquatic",
-        "фужерний",
-        "fougere",
-        "чоловічий",
-      ],
-      intent_context: {
-        best_for: ["daily", "office", "warm weather"],
-        projection: "medium",
-        longevity: "medium",
-        age_group: "adult",
-        image_style: ["clean", "fresh", "casual"],
-      },
-      user_friendly_reply:
-        "Зрозумів орієнтир: Oriflame Excite by Dima Bilan. Це чоловічий свіжий водно-фужерний аромат. Підберу чоловічі та унісекс варіанти з бази за нотами й характером.",
-      search_hint_text: "Орієнтир: Oriflame Excite by Dima Bilan, чоловічий fresh aquatic fougere",
-    },
-  },
-];
-
-function findKnownReferenceAlias(userText) {
-  const t = norm(userText);
-  if (!t) return null;
-
-  for (const entry of KNOWN_REFERENCE_ALIASES) {
-    const matched = entry.aliases.some((alias) => t.includes(norm(alias)));
-    if (matched) return { ...entry.analysis };
-  }
-
-  return null;
-}
-
-function mergeKnownReferenceIfNeeded(result, userText) {
-  const known = findKnownReferenceAlias(userText);
-  if (!known) return result;
-
-  return {
-    ...(result || {}),
-    ...known,
-    search_terms: uniq([
-      ...(result?.search_terms || []),
-      ...(known.search_terms || []),
-    ]),
-    name_aliases: uniq([
-      ...(result?.name_aliases || []),
-      ...(known.name_aliases || []),
-    ]),
-    possible_names: uniq([
-      ...(result?.possible_names || []),
-      ...(known.possible_names || []),
-    ]),
-  };
 }
 
 function extractDirectReferenceCandidate(text) {
@@ -204,23 +82,114 @@ function extractDirectReferenceCandidate(text) {
   if (!cleaned) return "";
 
   const words = cleaned.split(" ");
-  if (words.length <= 6) return cleaned;
+  if (words.length <= 8) return cleaned;
 
-  return words.slice(0, 6).join(" ");
+  return words.slice(0, 8).join(" ");
+}
+
+function humanGender(gender) {
+  const g = clean(gender).toLowerCase();
+  if (g === "male") return "чоловіків";
+  if (g === "female") return "жінок";
+  if (g === "unisex") return "унісекс";
+  return "тих, кому подобається цей напрям";
+}
+
+function humanProjection(value) {
+  const v = clean(value).toLowerCase();
+  if (v === "strong") return "виразний";
+  if (v === "medium") return "середній";
+  if (v === "low") return "делікатний";
+  return "орієнтовно середній";
+}
+
+function humanLongevity(value) {
+  const v = clean(value).toLowerCase();
+  if (v === "long") return "добра";
+  if (v === "medium") return "середня";
+  if (v === "low") return "легка";
+  return "орієнтовно середня";
+}
+
+function titleFrom(result) {
+  const brand = clean(result?.brand);
+  const name = clean(result?.target_name || result?.normalized_query || result?.corrected_query);
+
+  if (brand && name && !name.toLowerCase().includes(brand.toLowerCase())) {
+    return `${brand} ${name}`;
+  }
+
+  return name || brand || "цей аромат";
+}
+
+function buildDetailedIntro(result) {
+  const title = titleFrom(result);
+
+  const top = uniq(result?.notes_top).slice(0, 5);
+  const heart = uniq(result?.notes_heart).slice(0, 5);
+  const base = uniq(result?.notes_base).slice(0, 5);
+  const accords = uniq([...(result?.accords || []), ...(result?.style || [])]).slice(0, 7);
+  const seasons = uniq(result?.seasons).slice(0, 4);
+  const bestFor = uniq(result?.intent_context?.best_for || result?.best_for || []).slice(0, 4);
+  const image = uniq(result?.intent_context?.image_style || result?.image_style || []).slice(0, 4);
+
+  const parts = [];
+
+  parts.push(`Привіт! ✨ Орієнтир — ${title}.`);
+
+  const desc = clean(result?.description || result?.short_summary);
+  if (desc) {
+    parts.push(`\n${desc}`);
+  } else if (accords.length) {
+    parts.push(`\nЦе аромат у напрямі: ${accords.join(", ")}.`);
+  }
+
+  const noteLines = [];
+  if (top.length) noteLines.push(`• старт: ${top.join(", ")}`);
+  if (heart.length) noteLines.push(`• серце: ${heart.join(", ")}`);
+  if (base.length) noteLines.push(`• база: ${base.join(", ")}`);
+
+  if (noteLines.length) {
+    parts.push(`\n🌿 Ноти:\n${noteLines.join("\n")}`);
+  }
+
+  parts.push(`\n👤 Для кого: ${humanGender(result?.gender)}.`);
+
+  if (bestFor.length) {
+    parts.push(`🕯 Коли носити: ${bestFor.join(", ")}.`);
+  }
+
+  if (seasons.length) {
+    parts.push(`🍂 Сезон: ${seasons.join(", ")}.`);
+  }
+
+  if (image.length) {
+    parts.push(`🎭 Вайб: ${image.join(", ")}.`);
+  }
+
+  parts.push(
+    `🌫 Шлейф: ${humanProjection(result?.intent_context?.projection || result?.projection)}. ` +
+      `Стійкість: ${humanLongevity(result?.intent_context?.longevity || result?.longevity)}.`,
+  );
+
+  parts.push(`\nЗараз підберу з бази найближчі варіанти за нотами, акордами й загальним характером.`);
+
+  return parts.join("\n");
 }
 
 function postNormalizeReferenceFields(result, userText) {
-  const merged = mergeKnownReferenceIfNeeded(result, userText);
-  const out = { ...(merged || {}) };
+  const out = { ...(result || {}) };
 
   out.found = Boolean(out.found);
   out.query_type = out.query_type || "unknown";
-  out.target_name = String(out.target_name || "").trim();
-  out.brand = String(out.brand || "").trim();
+  out.target_name = clean(out.target_name);
+  out.brand = clean(out.brand);
 
-  out.corrected_query = String(out.corrected_query || "").trim();
-  out.translated_query = String(out.translated_query || "").trim();
-  out.normalized_query = String(out.normalized_query || "").trim();
+  out.corrected_query = clean(out.corrected_query || userText);
+  out.translated_query = clean(out.translated_query);
+  out.normalized_query = clean(out.normalized_query || out.target_name || out.corrected_query);
+  out.description = clean(out.description || out.short_summary);
+
   out.name_aliases = uniq(out.name_aliases);
   out.possible_names = uniq(out.possible_names);
 
@@ -237,17 +206,17 @@ function postNormalizeReferenceFields(result, userText) {
   out.search_terms = uniq(out.search_terms);
 
   out.intent_context = {
-    best_for: uniq(out.intent_context?.best_for || []),
+    best_for: uniq(out.intent_context?.best_for || out.best_for || []),
     projection: ["low", "medium", "strong", "unknown"].includes(out.intent_context?.projection)
       ? out.intent_context.projection
-      : "unknown",
+      : clean(out.projection || "unknown"),
     longevity: ["low", "medium", "long", "unknown"].includes(out.intent_context?.longevity)
       ? out.intent_context.longevity
-      : "unknown",
+      : clean(out.longevity || "unknown"),
     age_group: ["young", "adult", "mature", "any", "unknown"].includes(out.intent_context?.age_group)
       ? out.intent_context.age_group
-      : "unknown",
-    image_style: uniq(out.intent_context?.image_style || []),
+      : clean(out.age_group || "unknown"),
+    image_style: uniq(out.intent_context?.image_style || out.image_style || []),
   };
 
   const allSearch = [
@@ -259,6 +228,11 @@ function postNormalizeReferenceFields(result, userText) {
     out.brand,
     ...out.name_aliases,
     ...out.possible_names,
+    ...out.notes_top,
+    ...out.notes_heart,
+    ...out.notes_base,
+    ...out.accords,
+    ...out.style,
   ];
 
   out.search_terms = uniq(allSearch);
@@ -272,65 +246,120 @@ function postNormalizeReferenceFields(result, userText) {
     if (fallbackTarget) out.target_name = fallbackTarget;
   }
 
-  if (
-    out.query_type === "reference_perfume" &&
-    out.target_name &&
-    !out.search_terms.length
-  ) {
-    out.search_terms = uniq([
-      out.target_name,
-      out.brand,
-      ...out.name_aliases,
-      ...out.possible_names,
-      ...out.notes_top,
-      ...out.notes_heart,
-      ...out.notes_base,
-      ...out.accords,
-      ...out.style,
-    ]);
+  if (out.query_type === "reference_perfume") {
+    out.user_friendly_reply = buildDetailedIntro(out);
+    out.search_hint_text = `Орієнтир: ${titleFrom(out)}`;
+  } else if (!out.user_friendly_reply) {
+    out.user_friendly_reply = "Я проаналізував запит і підберу найближчі варіанти з бази.";
   }
 
+  // Страховка: ніколи не відправляємо користувачу "не знайшов" у reference mode.
   if (
     out.query_type === "reference_perfume" &&
-    out.target_name &&
-    !out.user_friendly_reply
+    /не\s+знайш(ов|ла|ли)|на\s+жаль|спробуйте\s+щось\s+інше|відсутн/i.test(
+      out.user_friendly_reply || "",
+    )
   ) {
-    out.user_friendly_reply = `Зрозумів орієнтир: ${out.target_name}. Зараз коротко опишу аромат і підберу схожі варіанти з бази.`;
-  }
-
-  if (!out.search_hint_text && out.query_type === "reference_perfume" && out.target_name) {
-    out.search_hint_text = `Орієнтир: ${out.target_name}`;
+    out.user_friendly_reply = buildDetailedIntro(out);
   }
 
   return out;
 }
 
-async function analyzePerfumeIntent(userText) {
+async function webReferenceLookup(userText, baseAnalysis) {
+  const target = clean(
+    [
+      baseAnalysis?.brand,
+      baseAnalysis?.target_name || baseAnalysis?.normalized_query || extractDirectReferenceCandidate(userText),
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+
+  if (!target || target.length < 3) return null;
+
+  const system = `
+You are a perfume researcher with web search.
+
+Find fragrance information and return a structured perfume profile.
+
+Return JSON only:
+{
+  "found": true,
+  "brand": "",
+  "target_name": "",
+  "corrected_query": "",
+  "translated_query": "",
+  "normalized_query": "",
+  "description": "",
+  "gender": "male|female|unisex|unknown",
+  "seasons": [],
+  "style": [],
+  "notes_top": [],
+  "notes_heart": [],
+  "notes_base": [],
+  "accords": [],
+  "search_terms": [],
+  "intent_context": {
+    "best_for": [],
+    "projection": "low|medium|strong|unknown",
+    "longevity": "low|medium|long|unknown",
+    "age_group": "young|adult|mature|any|unknown",
+    "image_style": []
+  }
+}
+
+Rules:
+- Use web search.
+- Prefer official brand page, Fragrantica, Parfumo, retailer pages, perfume databases.
+- If exact official notes are found, use them.
+- If exact fragrance is not found, infer cautiously from reliable pages and the product name.
+- Never write "not found" in description.
+- Description must be user-friendly Ukrainian text: 2-4 sentences.
+- For Sabrina Carpenter Sweet Tooth Lemon Pie: this is sweet gourmand lemon pie style; include lemon/citrus, vanilla/cream, sugar/biscuit/dessert/gourmand when supported.
+`;
+
+  const user = JSON.stringify(
+    {
+      userText,
+      lookup_query: target,
+      baseAnalysis,
+      try_queries: [
+        `${target} perfume notes`,
+        `${target} fragrance notes`,
+        `${target} Fragrantica`,
+        `${target} Parfumo`,
+      ],
+    },
+    null,
+    2,
+  );
+
+  try {
+    return await webJSON({
+      system,
+      user,
+      temperature: 0.05,
+    });
+  } catch (e) {
+    console.error("webReferenceLookup error:", e?.message || e);
+    return null;
+  }
+}
+
+async function analyzeBase(userText) {
   const directReferenceCandidate = extractDirectReferenceCandidate(userText);
   const hasReference = containsReferenceIntent(userText);
   const hasStyle = containsStyleIntent(userText);
   const maybeCode = looksLikeCode(userText);
 
-  const knownReference = findKnownReferenceAlias(userText);
-  if (knownReference) {
-    return postNormalizeReferenceFields(knownReference, userText);
-  }
-
   const system = `
 Ти AI-консультант парфумерного Telegram-бота.
 
-Головна задача:
-AI НЕ має замінювати базу даних.
-AI має розібрати запит, виправити орфографію, перекласти назви/ноти за потреби і повернути пошукові слова для повторного пошуку в БД.
+Завдання:
+розібрати запит і повернути perfume profile для пошуку в БД.
 
-Можливі query_type:
-- "reference_perfume"
-- "note_search"
-- "style_search"
-- "code_search"
-- "unknown"
-
-ФОРМАТ JSON:
+Поверни JSON:
 {
   "found": true,
   "query_type": "reference_perfume|note_search|style_search|code_search|unknown",
@@ -339,6 +368,7 @@ AI має розібрати запит, виправити орфографію
   "corrected_query": "",
   "translated_query": "",
   "normalized_query": "",
+  "description": "",
   "name_aliases": [],
   "possible_names": [],
   "gender": "male|female|unisex|unknown",
@@ -360,90 +390,18 @@ AI має розібрати запит, виправити орфографію
   "search_hint_text": ""
 }
 
-КРИТИЧНО ВАЖЛИВО:
-- Якщо користувач вводить переклад, трансліт або помилкову назву аромату, НЕ вигадуй новий аромат.
-- Спочатку визнач можливу оригінальну назву, виправ орфографію, переклади за потреби і поверни варіанти для пошуку в базі.
-- Якщо запит "Діма Білан", "Дима Билан", "Dima Bilan", "Oriflame Excite" — це чоловічий аромат "Excite by Dima Bilan" від Oriflame. Gender = "male". Ноти: bergamot, melon, quince, wormwood, tea, sea water, tarragon, musk, cedar, moss. Акорди: fresh, aquatic, fougere, fruity, green, woody, musky.
-- Якщо запит "плохая девочка" або "погана дівчинка", це НЕ новий аромат Twins. Це можливий alias до "Good Girl Gone Bad" / "Good Girl".
-- Якщо запит "гарна дівчинка", це можливий alias до "Good Girl".
-- Якщо запит "лакоста", це Lacoste / Лакост.
-- Якщо запит "габа", це GABA / Hormone GABA, НЕ Gabbana.
-
-ПРИКЛАДИ:
-"діма білан" ->
-{
-  "query_type": "reference_perfume",
-  "target_name": "Excite by Dima Bilan",
-  "brand": "Oriflame",
-  "gender": "male",
-  "notes_top": ["bergamot", "melon", "quince", "wormwood"],
-  "notes_heart": ["tea", "sea water", "tarragon"],
-  "notes_base": ["musk", "cedar", "moss"],
-  "accords": ["fresh", "aquatic", "fougere", "fruity", "green", "woody", "musky"],
-  "search_terms": ["oriflame", "excite", "dima bilan", "бергамот", "диня", "айва", "полин", "чай", "морська вода", "тархун", "мускус", "кедр", "мох", "свіжий", "водний", "фужерний", "чоловічий"]
-}
-
-"плохая девочка" ->
-{
-  "query_type": "reference_perfume",
-  "target_name": "Good Girl Gone Bad",
-  "corrected_query": "плохая девочка",
-  "translated_query": "bad girl",
-  "normalized_query": "good girl gone bad",
-  "possible_names": ["Good Girl Gone Bad", "Good Girl"],
-  "name_aliases": ["плохая девочка", "погана дівчинка", "good girl gone bad", "good girl"],
-  "search_terms": ["good girl gone bad", "good girl", "girl", "плохая девочка", "погана дівчинка"]
-}
-
-"гарна дівчинка" ->
-{
-  "query_type": "reference_perfume",
-  "target_name": "Good Girl",
-  "normalized_query": "good girl",
-  "possible_names": ["Good Girl", "Very Good Girl"],
-  "name_aliases": ["гарна дівчинка", "хорошая девочка", "good girl"],
-  "search_terms": ["good girl", "very good girl", "гарна дівчинка"]
-}
-
-"лакоста" ->
-{
-  "query_type": "reference_perfume",
-  "target_name": "Lacoste",
-  "brand": "Lacoste",
-  "normalized_query": "lacoste",
-  "name_aliases": ["лакоста", "лакост", "lacoste"],
-  "search_terms": ["lacoste", "лакоста", "лакост"]
-}
-
-"габа" ->
-{
-  "query_type": "reference_perfume",
-  "target_name": "GABA",
-  "normalized_query": "gaba",
-  "possible_names": ["GABA", "Hormone GABA"],
-  "name_aliases": ["габа", "gaba", "hormone"],
-  "search_terms": ["gaba", "габа", "hormone", "hormone gaba"]
-}
-
-"аромат тютюну" ->
-{
-  "query_type": "note_search",
-  "corrected_query": "аромат тютюну",
-  "translated_query": "tobacco fragrance",
-  "normalized_query": "tobacco",
-  "notes_top": ["tobacco"],
-  "accords": ["tobacco", "smoky", "warm spicy"],
-  "search_terms": ["тютюн", "табак", "tobacco", "smoky", "димний"]
-}
-
-ПРАВИЛА:
-- Якщо запит схожий на код: 60, 377A, 609А -> code_search.
-- Якщо користувач шукає конкретну ноту або акорд -> note_search.
-- Якщо користувач описує стиль без конкретної назви -> style_search.
-- Якщо є достатньо підстав вважати, що це конкретний аромат -> reference_perfume.
-- search_terms завжди заповнюй практичними словами для пошуку в БД.
-- Не пиши воду.
-- Поверни тільки JSON.
+КРИТИЧНО:
+- Якщо користувач просить "схожий на [назва/бренд]" — це reference_perfume.
+- НЕ пиши "не знайшов", "на жаль", "спробуйте інше".
+- Для reference_perfume user_friendly_reply має бути повним описом:
+  що за аромат, ноти, кому підходить, сезон, шлейф, стійкість, і фраза що зараз підбереш схожі з бази.
+- Якщо інформації мало — все одно дай обережний профіль за назвою/брендом, але не відмовляйся.
+- Якщо запит: "Sabrina Carpenter Lemon Pie", розпізнай як:
+  brand: "Sabrina Carpenter", target_name: "Sweet Tooth Lemon Pie" або "Lemon Pie",
+  стиль: sweet gourmand lemon pie, lemon/citrus, vanilla/cream, sugar/biscuit/dessert.
+- Якщо запит "плохая девочка" або "погана дівчинка" — це Good Girl Gone Bad / Good Girl.
+- Якщо запит "лакоста" — Lacoste.
+- Якщо запит "габа" — GABA / Hormone GABA, НЕ Gabbana.
 `;
 
   const user = JSON.stringify(
@@ -465,89 +423,114 @@ AI має розібрати запит, виправити орфографію
   const json = await chatJSON({
     system,
     user,
-    temperature: 0.15,
+    temperature: 0.1,
   });
 
   if (!json) {
     const fallbackTarget = hasReference ? directReferenceCandidate : "";
-    return postNormalizeReferenceFields(
-      {
-        found: Boolean(fallbackTarget),
-        query_type: fallbackTarget
-          ? "reference_perfume"
-          : maybeCode
-            ? "code_search"
-            : hasStyle
-              ? "style_search"
-              : "unknown",
-        target_name: fallbackTarget,
-        brand: "",
-        corrected_query: userText,
-        translated_query: "",
-        normalized_query: fallbackTarget || userText,
-        name_aliases: fallbackTarget ? [fallbackTarget] : [],
-        possible_names: fallbackTarget ? [fallbackTarget] : [],
-        gender: "unknown",
-        seasons: [],
-        style: [],
-        notes_top: [],
-        notes_heart: [],
-        notes_base: [],
-        accords: [],
-        search_terms: fallbackTarget ? [fallbackTarget] : [userText],
-        intent_context: {
-          best_for: [],
-          projection: "unknown",
-          longevity: "unknown",
-          age_group: "unknown",
-          image_style: [],
-        },
-        user_friendly_reply: fallbackTarget
-          ? `Зрозумів орієнтир: ${fallbackTarget}.`
-          : "Не до кінця зрозумів запит. Напишіть назву аромату, код, ноти або стиль.",
-        search_hint_text: fallbackTarget ? `Орієнтир: ${fallbackTarget}` : "",
+    return {
+      found: Boolean(fallbackTarget),
+      query_type: fallbackTarget
+        ? "reference_perfume"
+        : maybeCode
+          ? "code_search"
+          : hasStyle
+            ? "style_search"
+            : "unknown",
+      target_name: fallbackTarget,
+      brand: "",
+      corrected_query: userText,
+      translated_query: "",
+      normalized_query: fallbackTarget || userText,
+      description: "",
+      name_aliases: fallbackTarget ? [fallbackTarget] : [],
+      possible_names: fallbackTarget ? [fallbackTarget] : [],
+      gender: "unknown",
+      seasons: [],
+      style: [],
+      notes_top: [],
+      notes_heart: [],
+      notes_base: [],
+      accords: [],
+      search_terms: fallbackTarget ? [fallbackTarget] : [userText],
+      intent_context: {
+        best_for: [],
+        projection: "unknown",
+        longevity: "unknown",
+        age_group: "unknown",
+        image_style: [],
       },
-      userText,
-    );
+    };
   }
 
-  return postNormalizeReferenceFields(
-    {
-      found: Boolean(json.found),
-      query_type: json.query_type || "unknown",
-      target_name: json.target_name || "",
-      brand: json.brand || "",
+  return json;
+}
 
-      corrected_query: json.corrected_query || "",
-      translated_query: json.translated_query || "",
-      normalized_query: json.normalized_query || "",
-      name_aliases: Array.isArray(json.name_aliases) ? json.name_aliases : [],
-      possible_names: Array.isArray(json.possible_names) ? json.possible_names : [],
+function mergeAnalysis(base, web) {
+  if (!web) return base;
 
-      gender: json.gender || "unknown",
-      seasons: Array.isArray(json.seasons) ? json.seasons : [],
-      style: Array.isArray(json.style) ? json.style : [],
-      notes_top: Array.isArray(json.notes_top) ? json.notes_top : [],
-      notes_heart: Array.isArray(json.notes_heart) ? json.notes_heart : [],
-      notes_base: Array.isArray(json.notes_base) ? json.notes_base : [],
-      accords: Array.isArray(json.accords) ? json.accords : [],
-      search_terms: Array.isArray(json.search_terms) ? json.search_terms : [],
-      intent_context: {
-        best_for: Array.isArray(json.intent_context?.best_for)
-          ? json.intent_context.best_for
-          : [],
-        projection: json.intent_context?.projection || "unknown",
-        longevity: json.intent_context?.longevity || "unknown",
-        age_group: json.intent_context?.age_group || "unknown",
-        image_style: Array.isArray(json.intent_context?.image_style)
-          ? json.intent_context.image_style
-          : [],
-      },
-      user_friendly_reply: json.user_friendly_reply || "",
-      search_hint_text: json.search_hint_text || "",
+  return {
+    ...(base || {}),
+    ...(web || {}),
+
+    brand: clean(web.brand || base?.brand),
+    target_name: clean(web.target_name || base?.target_name),
+    corrected_query: clean(web.corrected_query || base?.corrected_query),
+    translated_query: clean(web.translated_query || base?.translated_query),
+    normalized_query: clean(web.normalized_query || base?.normalized_query),
+
+    description: clean(web.description || base?.description),
+
+    gender: clean(web.gender || base?.gender || "unknown"),
+
+    seasons: uniq([...(base?.seasons || []), ...(web?.seasons || [])]),
+    style: uniq([...(base?.style || []), ...(web?.style || [])]),
+    notes_top: uniq([...(base?.notes_top || []), ...(web?.notes_top || [])]),
+    notes_heart: uniq([...(base?.notes_heart || []), ...(web?.notes_heart || [])]),
+    notes_base: uniq([...(base?.notes_base || []), ...(web?.notes_base || [])]),
+    accords: uniq([...(base?.accords || []), ...(web?.accords || [])]),
+
+    search_terms: uniq([...(base?.search_terms || []), ...(web?.search_terms || [])]),
+
+    intent_context: {
+      best_for: uniq([
+        ...(base?.intent_context?.best_for || []),
+        ...(web?.intent_context?.best_for || []),
+      ]),
+      projection:
+        web?.intent_context?.projection ||
+        base?.intent_context?.projection ||
+        "unknown",
+      longevity:
+        web?.intent_context?.longevity ||
+        base?.intent_context?.longevity ||
+        "unknown",
+      age_group:
+        web?.intent_context?.age_group ||
+        base?.intent_context?.age_group ||
+        "unknown",
+      image_style: uniq([
+        ...(base?.intent_context?.image_style || []),
+        ...(web?.intent_context?.image_style || []),
+      ]),
     },
-    userText,
-  );
+  };
+}
+
+async function analyzePerfumeIntent(userText) {
+  const base = await analyzeBase(userText);
+
+  let merged = base;
+
+  if (base?.query_type === "reference_perfume") {
+    const useWeb = String(process.env.PERFUME_WEB_LOOKUP || "1") !== "0";
+    if (useWeb) {
+      const web = await webReferenceLookup(userText, base);
+      merged = mergeAnalysis(base, web);
+    }
+  }
+
+  return postNormalizeReferenceFields(merged, userText);
 }
 
 module.exports = { analyzePerfumeIntent };
