@@ -1,11 +1,57 @@
 const { chatJSON } = require("./client");
 
+const UK_TRANSLATIONS = new Map([
+  ["lemon", "лимон"],
+  ["citrus", "цитруси"],
+  ["bergamot", "бергамот"],
+  ["italian bergamot", "італійський бергамот"],
+  ["neroli", "неролі"],
+  ["candied lemon zest", "цукати з лимонної цедри"],
+  ["vanilla", "ваніль"],
+  ["cream", "крем"],
+  ["whipped cream", "збиті вершки"],
+  ["sugar", "цукор"],
+  ["biscuit", "бісквіт"],
+  ["dessert", "десертний акорд"],
+  ["graham cracker crust", "основа з крекера"],
+  ["jasmine", "жасмин"],
+  ["orange blossom", "апельсиновий цвіт"],
+  ["spring", "весна"],
+  ["summer", "літо"],
+  ["autumn", "осінь"],
+  ["fall", "осінь"],
+  ["winter", "зима"],
+  ["daily", "на кожен день"],
+  ["office", "офіс"],
+  ["date", "побачення"],
+  ["evening", "вечір"],
+  ["playful", "грайливий"],
+  ["nostalgic", "ностальгійний"],
+  ["vintage", "вінтажний"],
+]);
+
 function uniq(arr = []) {
-  return [...new Set((arr || []).map((x) => String(x || "").trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      (arr || [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function clean(value) {
   return String(value || "").trim();
+}
+
+function toUk(value) {
+  const raw = clean(value);
+  if (!raw) return "";
+  return UK_TRANSLATIONS.get(raw.toLowerCase()) || raw;
+}
+
+function translateListUk(arr = []) {
+  return uniq(arr).map(toUk).filter(Boolean);
 }
 
 function humanGender(gender) {
@@ -34,18 +80,32 @@ function humanLongevity(value) {
 
 function buildFallbackIntro(analysis) {
   const brand = clean(analysis?.brand);
-  const name = clean(analysis?.target_name || analysis?.normalized_query || analysis?.corrected_query || "цей аромат");
-  const title = brand && name && !name.toLowerCase().includes(brand.toLowerCase())
-    ? `${brand} ${name}`
-    : name;
+  const name = clean(
+    analysis?.target_name ||
+      analysis?.normalized_query ||
+      analysis?.corrected_query ||
+      "цей аромат",
+  );
 
-  const top = uniq(analysis?.notes_top).slice(0, 5);
-  const heart = uniq(analysis?.notes_heart).slice(0, 5);
-  const base = uniq(analysis?.notes_base).slice(0, 5);
-  const accords = uniq([...(analysis?.accords || []), ...(analysis?.style || [])]).slice(0, 7);
-  const seasons = uniq(analysis?.seasons).slice(0, 4);
-  const bestFor = uniq(analysis?.intent_context?.best_for || []).slice(0, 4);
-  const image = uniq(analysis?.intent_context?.image_style || []).slice(0, 4);
+  const title =
+    brand && name && !name.toLowerCase().includes(brand.toLowerCase())
+      ? `${brand} ${name}`
+      : name;
+
+  const top = translateListUk(analysis?.notes_top).slice(0, 5);
+  const heart = translateListUk(analysis?.notes_heart).slice(0, 5);
+  const base = translateListUk(analysis?.notes_base).slice(0, 5);
+  const accords = translateListUk([
+    ...(analysis?.accords || []),
+    ...(analysis?.style || []),
+  ]).slice(0, 7);
+
+  const seasons = translateListUk(analysis?.seasons).slice(0, 4);
+  const bestFor = translateListUk(analysis?.intent_context?.best_for || [])
+    .filter((x) => !/young|adult|mature/i.test(x))
+    .slice(0, 4);
+
+  const image = translateListUk(analysis?.intent_context?.image_style || []).slice(0, 4);
 
   const out = [];
 
@@ -66,8 +126,8 @@ function buildFallbackIntro(analysis) {
 
   out.push(`\n👤 Для кого: ${humanGender(analysis?.gender)}.`);
 
-  if (bestFor.length) out.push(`🕯 Коли носити: ${bestFor.join(", ")}.`);
   if (seasons.length) out.push(`🍂 Сезон: ${seasons.join(", ")}.`);
+  if (bestFor.length) out.push(`🕯 Коли носити: ${bestFor.join(", ")}.`);
   if (image.length) out.push(`🎭 Вайб: ${image.join(", ")}.`);
 
   out.push(
@@ -75,7 +135,9 @@ function buildFallbackIntro(analysis) {
       `Стійкість: ${humanLongevity(analysis?.intent_context?.longevity)}.`,
   );
 
-  out.push(`\nЗараз підберу з бази найближчі варіанти за нотами, акордами й загальним характером.`);
+  out.push(
+    `\nЗараз підберу з бази найближчі варіанти за нотами, акордами й загальним характером.`,
+  );
 
   return out.join("\n");
 }
@@ -92,7 +154,10 @@ async function writeReferencePerfumeIntro({ userText, analysis }) {
 
 КРИТИЧНО:
 - Ніколи не пиши "не знайшов", "на жаль", "спробуйте інше".
-- Навіть якщо аромату немає в нашій БД, описуй його як орієнтир.
+- Усі видимі ноти мають бути українською мовою.
+- Не пиши: "young, adult, mature".
+- Не пиши англійські сезони: spring, summer, autumn, winter.
+- Якщо дані про вік є, можна просто написати "для молодої аудиторії" або пропустити.
 - Обов'язково включи:
   1. що це за аромат
   2. ноти
@@ -111,12 +176,22 @@ async function writeReferencePerfumeIntro({ userText, analysis }) {
       temperature: 0.35,
     });
 
-    const intro = clean(json?.intro_text);
+    let intro = clean(json?.intro_text);
 
     if (
       intro &&
       !/не\s+знайш|на\s+жаль|спробуйте\s+щось\s+інше|відсутн/i.test(intro)
     ) {
+      // Захист від англійських age-слів, які модель іноді вставляє.
+      intro = intro
+        .replace(/🕯\s*Коли носити:\s*young,\s*adult,\s*mature\.?\s*/gi, "")
+        .replace(/young,\s*adult,\s*mature/gi, "")
+        .replace(/\bspring\b/gi, "весна")
+        .replace(/\bsummer\b/gi, "літо")
+        .replace(/\bautumn\b/gi, "осінь")
+        .replace(/\bfall\b/gi, "осінь")
+        .replace(/\bwinter\b/gi, "зима");
+
       return intro;
     }
   } catch (e) {

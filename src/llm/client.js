@@ -56,7 +56,8 @@ async function chatJSON({ system, user, temperature = 0.2 }) {
 async function webJSON({ system, user, temperature = 0.15 }) {
   const model = process.env.OPENAI_WEB_MODEL || "gpt-4.1-mini";
   const preferredTool = process.env.OPENAI_WEB_SEARCH_TOOL || "web_search_preview";
-  const fallbackTool = preferredTool === "web_search" ? "web_search_preview" : "web_search";
+  const fallbackTool =
+    preferredTool === "web_search" ? "web_search_preview" : "web_search";
 
   const input = [
     {

@@ -1,7 +1,13 @@
 const { chatJSON, webJSON } = require("./client");
 
 function uniq(arr = []) {
-  return [...new Set((arr || []).map((x) => String(x || "").trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      (arr || [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 function clean(value) {
@@ -16,6 +22,123 @@ function norm(s) {
     .replace(/["'`’]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+const UK_TRANSLATIONS = new Map([
+  ["lemon", "лимон"],
+  ["citrus", "цитруси"],
+  ["citron", "цитрон"],
+  ["bergamot", "бергамот"],
+  ["italian bergamot", "італійський бергамот"],
+  ["orange", "апельсин"],
+  ["orange blossom", "апельсиновий цвіт"],
+  ["mandarin", "мандарин"],
+  ["grapefruit", "грейпфрут"],
+  ["neroli", "неролі"],
+  ["candied lemon zest", "цукати з лимонної цедри"],
+  ["lemon zest", "лимонна цедра"],
+  ["lime", "лайм"],
+
+  ["vanilla", "ваніль"],
+  ["cream", "крем"],
+  ["whipped cream", "збиті вершки"],
+  ["sugar", "цукор"],
+  ["biscuit", "бісквіт"],
+  ["cookie", "печиво"],
+  ["cookies", "печиво"],
+  ["graham cracker crust", "основа з крекера"],
+  ["cracker", "крекер"],
+  ["dessert", "десертний акорд"],
+  ["cake", "тістечко"],
+  ["pie", "пиріг"],
+  ["caramel", "карамель"],
+  ["honey", "мед"],
+  ["milk", "молоко"],
+  ["condensed milk", "згущене молоко"],
+  ["meringue", "меренга"],
+  ["limoncello", "лімончелло"],
+
+  ["jasmine", "жасмин"],
+  ["rose", "троянда"],
+  ["violet", "фіалка"],
+  ["iris", "ірис"],
+  ["peony", "півонія"],
+  ["white flowers", "білі квіти"],
+  ["floral", "квітковий"],
+
+  ["musk", "мускус"],
+  ["white musk", "білий мускус"],
+  ["amber", "амбра"],
+  ["cedar", "кедр"],
+  ["sandalwood", "сандал"],
+  ["patchouli", "пачулі"],
+  ["vetiver", "ветивер"],
+  ["tonka", "боби тонка"],
+  ["tonka bean", "боби тонка"],
+
+  ["tobacco", "тютюн"],
+  ["rum", "ром"],
+  ["whiskey", "віскі"],
+  ["cognac", "коньяк"],
+  ["vodka", "горілка"],
+  ["boozy", "алкогольний"],
+  ["alcoholic", "алкогольний"],
+
+  ["pepper", "перець"],
+  ["black pepper", "чорний перець"],
+  ["pink pepper", "рожевий перець"],
+  ["spicy", "пряний"],
+  ["warm spicy", "тепло-пряний"],
+  ["fresh spicy", "свіжо-пряний"],
+
+  ["peach", "персик"],
+  ["apple", "яблуко"],
+  ["pear", "груша"],
+  ["melon", "диня"],
+  ["quince", "айва"],
+  ["pineapple", "ананас"],
+  ["black currant", "чорна смородина"],
+  ["blackcurrant", "чорна смородина"],
+
+  ["gourmand", "гурманський"],
+  ["sweet", "солодкий"],
+  ["creamy", "кремовий"],
+  ["powdery", "пудровий"],
+  ["fresh", "свіжий"],
+  ["aquatic", "водний"],
+  ["marine", "морський"],
+  ["woody", "деревний"],
+  ["musky", "мускусний"],
+  ["fruity", "фруктовий"],
+  ["citrusy", "цитрусовий"],
+  ["green", "зелений"],
+  ["clean", "чистий"],
+  ["soft", "мʼякий"],
+  ["playful", "грайливий"],
+  ["nostalgic", "ностальгійний"],
+  ["vintage", "вінтажний"],
+  ["casual", "повсякденний"],
+  ["daily", "на кожен день"],
+  ["office", "офіс"],
+  ["date", "побачення"],
+  ["evening", "вечір"],
+  ["day", "день"],
+  ["spring", "весна"],
+  ["summer", "літо"],
+  ["autumn", "осінь"],
+  ["fall", "осінь"],
+  ["winter", "зима"],
+]);
+
+function toUk(value) {
+  const raw = clean(value);
+  if (!raw) return "";
+  const key = raw.toLowerCase();
+  return UK_TRANSLATIONS.get(key) || raw;
+}
+
+function translateListUk(arr = []) {
+  return uniq(arr).map(toUk).filter(Boolean);
 }
 
 function hasCyrillic(str) {
@@ -122,16 +245,33 @@ function titleFrom(result) {
   return name || brand || "цей аромат";
 }
 
+function seasonText(seasons = []) {
+  const uk = translateListUk(seasons).filter((x) => !/young|adult|mature/i.test(x));
+  return uk.length ? uk.slice(0, 4).join(", ") : "";
+}
+
+function bestForText(bestFor = []) {
+  const filtered = uniq(bestFor).filter((x) => !/young|adult|mature/i.test(x));
+  const uk = translateListUk(filtered);
+  return uk.length ? uk.slice(0, 4).join(", ") : "";
+}
+
+function imageStyleText(image = []) {
+  const uk = translateListUk(image).filter(Boolean);
+  return uk.length ? uk.slice(0, 4).join(", ") : "";
+}
+
 function buildDetailedIntro(result) {
   const title = titleFrom(result);
 
-  const top = uniq(result?.notes_top).slice(0, 5);
-  const heart = uniq(result?.notes_heart).slice(0, 5);
-  const base = uniq(result?.notes_base).slice(0, 5);
-  const accords = uniq([...(result?.accords || []), ...(result?.style || [])]).slice(0, 7);
-  const seasons = uniq(result?.seasons).slice(0, 4);
-  const bestFor = uniq(result?.intent_context?.best_for || result?.best_for || []).slice(0, 4);
-  const image = uniq(result?.intent_context?.image_style || result?.image_style || []).slice(0, 4);
+  const top = translateListUk(result?.notes_top).slice(0, 5);
+  const heart = translateListUk(result?.notes_heart).slice(0, 5);
+  const base = translateListUk(result?.notes_base).slice(0, 5);
+  const accords = translateListUk([...(result?.accords || []), ...(result?.style || [])]).slice(0, 7);
+
+  const seasons = seasonText(result?.seasons);
+  const bestFor = bestForText(result?.intent_context?.best_for || result?.best_for || []);
+  const image = imageStyleText(result?.intent_context?.image_style || result?.image_style || []);
 
   const parts = [];
 
@@ -155,16 +295,16 @@ function buildDetailedIntro(result) {
 
   parts.push(`\n👤 Для кого: ${humanGender(result?.gender)}.`);
 
-  if (bestFor.length) {
-    parts.push(`🕯 Коли носити: ${bestFor.join(", ")}.`);
+  if (seasons) {
+    parts.push(`🍂 Сезон: ${seasons}.`);
   }
 
-  if (seasons.length) {
-    parts.push(`🍂 Сезон: ${seasons.join(", ")}.`);
+  if (bestFor) {
+    parts.push(`🕯 Коли носити: ${bestFor}.`);
   }
 
-  if (image.length) {
-    parts.push(`🎭 Вайб: ${image.join(", ")}.`);
+  if (image) {
+    parts.push(`🎭 Вайб: ${image}.`);
   }
 
   parts.push(
@@ -197,16 +337,18 @@ function postNormalizeReferenceFields(result, userText) {
     ? out.gender
     : "unknown";
 
-  out.seasons = uniq(out.seasons);
-  out.style = uniq(out.style);
-  out.notes_top = uniq(out.notes_top);
-  out.notes_heart = uniq(out.notes_heart);
-  out.notes_base = uniq(out.notes_base);
-  out.accords = uniq(out.accords);
+  out.seasons = translateListUk(out.seasons);
+  out.style = translateListUk(out.style);
+  out.notes_top = translateListUk(out.notes_top);
+  out.notes_heart = translateListUk(out.notes_heart);
+  out.notes_base = translateListUk(out.notes_base);
+  out.accords = translateListUk(out.accords);
   out.search_terms = uniq(out.search_terms);
 
   out.intent_context = {
-    best_for: uniq(out.intent_context?.best_for || out.best_for || []),
+    best_for: translateListUk(out.intent_context?.best_for || out.best_for || []).filter(
+      (x) => !/young|adult|mature/i.test(x),
+    ),
     projection: ["low", "medium", "strong", "unknown"].includes(out.intent_context?.projection)
       ? out.intent_context.projection
       : clean(out.projection || "unknown"),
@@ -216,7 +358,7 @@ function postNormalizeReferenceFields(result, userText) {
     age_group: ["young", "adult", "mature", "any", "unknown"].includes(out.intent_context?.age_group)
       ? out.intent_context.age_group
       : clean(out.age_group || "unknown"),
-    image_style: uniq(out.intent_context?.image_style || out.image_style || []),
+    image_style: translateListUk(out.intent_context?.image_style || out.image_style || []),
   };
 
   const allSearch = [
@@ -253,7 +395,6 @@ function postNormalizeReferenceFields(result, userText) {
     out.user_friendly_reply = "Я проаналізував запит і підберу найближчі варіанти з бази.";
   }
 
-  // Страховка: ніколи не відправляємо користувачу "не знайшов" у reference mode.
   if (
     out.query_type === "reference_perfume" &&
     /не\s+знайш(ов|ла|ли)|на\s+жаль|спробуйте\s+щось\s+інше|відсутн/i.test(
@@ -315,8 +456,11 @@ Rules:
 - If exact official notes are found, use them.
 - If exact fragrance is not found, infer cautiously from reliable pages and the product name.
 - Never write "not found" in description.
-- Description must be user-friendly Ukrainian text: 2-4 sentences.
-- For Sabrina Carpenter Sweet Tooth Lemon Pie: this is sweet gourmand lemon pie style; include lemon/citrus, vanilla/cream, sugar/biscuit/dessert/gourmand when supported.
+- Description must be Ukrainian user-friendly text: 2-4 sentences.
+- All notes in description may be Ukrainian.
+- For arrays notes_top/notes_heart/notes_base/search_terms use English or source terms; code will translate visible notes.
+- Do NOT put age groups like young/adult/mature into best_for. Put age_group separately.
+- For Sabrina Carpenter Sweet Tooth Lemon Pie: sweet gourmand lemon pie style; include lemon/citrus, vanilla/cream, sugar/biscuit/dessert/gourmand when supported.
 `;
 
   const user = JSON.stringify(
@@ -393,9 +537,9 @@ async function analyzeBase(userText) {
 КРИТИЧНО:
 - Якщо користувач просить "схожий на [назва/бренд]" — це reference_perfume.
 - НЕ пиши "не знайшов", "на жаль", "спробуйте інше".
-- Для reference_perfume user_friendly_reply має бути повним описом:
-  що за аромат, ноти, кому підходить, сезон, шлейф, стійкість, і фраза що зараз підбереш схожі з бази.
+- Для reference_perfume user_friendly_reply має бути повним описом.
 - Якщо інформації мало — все одно дай обережний профіль за назвою/брендом, але не відмовляйся.
+- Не став young/adult/mature у best_for. Це тільки age_group.
 - Якщо запит: "Sabrina Carpenter Lemon Pie", розпізнай як:
   brand: "Sabrina Carpenter", target_name: "Sweet Tooth Lemon Pie" або "Lemon Pie",
   стиль: sweet gourmand lemon pie, lemon/citrus, vanilla/cream, sugar/biscuit/dessert.
@@ -533,4 +677,8 @@ async function analyzePerfumeIntent(userText) {
   return postNormalizeReferenceFields(merged, userText);
 }
 
-module.exports = { analyzePerfumeIntent };
+module.exports = {
+  analyzePerfumeIntent,
+  translateListUk,
+  toUk,
+};
