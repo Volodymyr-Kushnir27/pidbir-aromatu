@@ -54,7 +54,7 @@ function containsStyleIntent(text) {
   const t = norm(text);
 
   return (
-    /\b(свіж|сладк|солодк|пряний|деревн|древесн|зелений|зелёный|морський|морской|чистий|чистый|дымн|димн|мускусн|цитрус|фрукт|квітк|цветоч|шкіря|кожан|офіс|вечір|вечер|побачення|свидание|на каждый день|щодня|лето|зима|осінь|весна)\b/i.test(
+    /\b(свіж|сладк|солодк|пряний|деревн|древесн|зелений|зелёный|морський|морской|чистий|чистый|дымн|димн|мускусн|цитрус|фрукт|квітк|цветоч|шкіря|кожан|офіс|вечір|вечер|побачення|свидание|на каждый день|щодня|лето|зима|осінь|весна|тютюн|табак|tobacco|перець|перец|pepper|персик|peach)\b/i.test(
       t,
     )
   );
@@ -90,6 +90,12 @@ function postNormalizeReferenceFields(result, userText) {
   out.target_name = String(out.target_name || "").trim();
   out.brand = String(out.brand || "").trim();
 
+  out.corrected_query = String(out.corrected_query || "").trim();
+  out.translated_query = String(out.translated_query || "").trim();
+  out.normalized_query = String(out.normalized_query || "").trim();
+  out.name_aliases = uniq(out.name_aliases);
+  out.possible_names = uniq(out.possible_names);
+
   out.gender = ["male", "female", "unisex", "unknown"].includes(out.gender)
     ? out.gender
     : "unknown";
@@ -116,6 +122,19 @@ function postNormalizeReferenceFields(result, userText) {
     image_style: uniq(out.intent_context?.image_style || []),
   };
 
+  const allSearch = [
+    ...out.search_terms,
+    out.corrected_query,
+    out.translated_query,
+    out.normalized_query,
+    out.target_name,
+    out.brand,
+    ...out.name_aliases,
+    ...out.possible_names,
+  ];
+
+  out.search_terms = uniq(allSearch);
+
   if (
     out.query_type === "reference_perfume" &&
     !out.target_name &&
@@ -133,6 +152,8 @@ function postNormalizeReferenceFields(result, userText) {
     out.search_terms = uniq([
       out.target_name,
       out.brand,
+      ...out.name_aliases,
+      ...out.possible_names,
       ...out.notes_top,
       ...out.notes_heart,
       ...out.notes_base,
@@ -165,17 +186,9 @@ async function analyzePerfumeIntent(userText) {
   const system = `
 Ти AI-консультант парфумерного Telegram-бота.
 
-Твоє завдання:
-1. Правильно визначити тип запиту користувача.
-2. Якщо користувач назвав КОНКРЕТНИЙ аромат, навіть якщо він НЕ з бази, розпізнати його як reference_perfume.
-3. Якщо це відомий аромат або комерційна інтерпретація/аналог аромату, спробувати відновити:
-   - назву
-   - бренд
-   - ноти
-   - акорди
-   - характер
-   - сезонність
-4. Повернути тільки JSON.
+Головна задача:
+AI НЕ має замінювати базу даних.
+AI має розібрати запит, виправити орфографію, перекласти назви/ноти за потреби і повернути пошукові слова для повторного пошуку в БД.
 
 Можливі query_type:
 - "reference_perfume"
@@ -184,12 +197,17 @@ async function analyzePerfumeIntent(userText) {
 - "code_search"
 - "unknown"
 
-ФОРМАТ:
+ФОРМАТ JSON:
 {
   "found": true,
   "query_type": "reference_perfume|note_search|style_search|code_search|unknown",
   "target_name": "",
   "brand": "",
+  "corrected_query": "",
+  "translated_query": "",
+  "normalized_query": "",
+  "name_aliases": [],
+  "possible_names": [],
   "gender": "male|female|unisex|unknown",
   "seasons": [],
   "style": [],
@@ -209,34 +227,76 @@ async function analyzePerfumeIntent(userText) {
   "search_hint_text": ""
 }
 
-ДУЖЕ ВАЖЛИВО:
-- Якщо користувач називає аромат, навіть коротко, типу:
-  - "Gaba"
-  - "TWINS Gaba"
-  - "Sweet Peony"
-  - "Black Opium"
-  - "користуюсь ароматом Gaba"
-  - "підбери щось схоже на TWINS Gaba"
-  це ТРЕБА трактувати як reference_perfume, а не style_search.
-- Якщо це бренд + модель, поверни і brand, і target_name.
-- Якщо це просто бренд без моделі (наприклад тільки "Yves Saint Laurent"), тоді теж можна ставити reference_perfume, але target_name лишається загальнішим, а ноти — тільки якщо дійсно впевнений.
-- Якщо аромат схожий на відомий референс або є клон/інтерпретація, можна використати знання про цей аромат, щоб витягнути ноти та акорди.
-- Якщо в назві є слова типу "Gaba", "Sweet Peony", "Rose Petals", "Black Opium", "Libre", "Y", "Toy Boy", "The Hedonist" — це НЕ unknown.
-- Якщо бачиш в запиті назву аромату + фрази "схоже", "аналог", "підкажи схожий", це майже завжди reference_perfume.
+КРИТИЧНО ВАЖЛИВО:
+- Якщо користувач вводить переклад, трансліт або помилкову назву аромату, НЕ вигадуй новий аромат.
+- Спочатку визнач можливу оригінальну назву, виправ орфографію, переклади за потреби і поверни варіанти для пошуку в базі.
+- Якщо запит "плохая девочка" або "погана дівчинка", це НЕ новий аромат Twins. Це можливий alias до "Good Girl Gone Bad" / "Good Girl".
+- Якщо запит "гарна дівчинка", це можливий alias до "Good Girl".
+- Якщо запит "лакоста", це Lacoste / Лакост.
+- Якщо запит "габа", це GABA / Hormone GABA, НЕ Gabbana.
+
+ПРИКЛАДИ:
+"плохая девочка" ->
+{
+  "query_type": "reference_perfume",
+  "target_name": "Good Girl Gone Bad",
+  "corrected_query": "плохая девочка",
+  "translated_query": "bad girl",
+  "normalized_query": "good girl gone bad",
+  "possible_names": ["Good Girl Gone Bad", "Good Girl"],
+  "name_aliases": ["плохая девочка", "погана дівчинка", "good girl gone bad", "good girl"],
+  "search_terms": ["good girl gone bad", "good girl", "girl", "плохая девочка", "погана дівчинка"]
+}
+
+"гарна дівчинка" ->
+{
+  "query_type": "reference_perfume",
+  "target_name": "Good Girl",
+  "normalized_query": "good girl",
+  "possible_names": ["Good Girl", "Very Good Girl"],
+  "name_aliases": ["гарна дівчинка", "хорошая девочка", "good girl"],
+  "search_terms": ["good girl", "very good girl", "гарна дівчинка"]
+}
+
+"лакоста" ->
+{
+  "query_type": "reference_perfume",
+  "target_name": "Lacoste",
+  "brand": "Lacoste",
+  "normalized_query": "lacoste",
+  "name_aliases": ["лакоста", "лакост", "lacoste"],
+  "search_terms": ["lacoste", "лакоста", "лакост"]
+}
+
+"габа" ->
+{
+  "query_type": "reference_perfume",
+  "target_name": "GABA",
+  "normalized_query": "gaba",
+  "possible_names": ["GABA", "Hormone GABA"],
+  "name_aliases": ["габа", "gaba", "hormone"],
+  "search_terms": ["gaba", "габа", "hormone", "hormone gaba"]
+}
+
+"аромат тютюну" ->
+{
+  "query_type": "note_search",
+  "corrected_query": "аромат тютюну",
+  "translated_query": "tobacco fragrance",
+  "normalized_query": "tobacco",
+  "notes_top": ["tobacco"],
+  "accords": ["tobacco", "smoky", "warm spicy"],
+  "search_terms": ["тютюн", "табак", "tobacco", "smoky", "димний"]
+}
 
 ПРАВИЛА:
 - Якщо запит схожий на код: 60, 377A, 609А -> code_search.
 - Якщо користувач шукає конкретну ноту або акорд -> note_search.
 - Якщо користувач описує стиль без конкретної назви -> style_search.
 - Якщо є достатньо підстав вважати, що це конкретний аромат -> reference_perfume.
-- Якщо користувач вказує сімейства/дескриптори (наприклад: "свіжий фруктовий", "цитрусовий", "зелений", "морський"),
-  обов'язково додай релевантні ноти/акорди у notes_top/notes_heart/notes_base/accords/search_terms.
-- Не пиши води.
-- Не пиши довгих вступів.
-- user_friendly_reply:
-  - для reference_perfume: 1 коротке речення
-  - для інших: теж коротко
-- Якщо не знаєш точних нот — поверни найбільш імовірні акорди/стиль, але НЕ залишай усе пустим, якщо явно є конкретний аромат.
+- search_terms завжди заповнюй практичними словами для пошуку в БД.
+- Не пиши воду.
+- Поверни тільки JSON.
 `;
 
   const user = JSON.stringify(
@@ -258,7 +318,7 @@ async function analyzePerfumeIntent(userText) {
   const json = await chatJSON({
     system,
     user,
-    temperature: 0.25,
+    temperature: 0.15,
   });
 
   if (!json) {
@@ -275,6 +335,11 @@ async function analyzePerfumeIntent(userText) {
               : "unknown",
         target_name: fallbackTarget,
         brand: "",
+        corrected_query: userText,
+        translated_query: "",
+        normalized_query: fallbackTarget || userText,
+        name_aliases: fallbackTarget ? [fallbackTarget] : [],
+        possible_names: fallbackTarget ? [fallbackTarget] : [],
         gender: "unknown",
         seasons: [],
         style: [],
@@ -282,7 +347,7 @@ async function analyzePerfumeIntent(userText) {
         notes_heart: [],
         notes_base: [],
         accords: [],
-        search_terms: fallbackTarget ? [fallbackTarget] : [],
+        search_terms: fallbackTarget ? [fallbackTarget] : [userText],
         intent_context: {
           best_for: [],
           projection: "unknown",
@@ -305,6 +370,13 @@ async function analyzePerfumeIntent(userText) {
       query_type: json.query_type || "unknown",
       target_name: json.target_name || "",
       brand: json.brand || "",
+
+      corrected_query: json.corrected_query || "",
+      translated_query: json.translated_query || "",
+      normalized_query: json.normalized_query || "",
+      name_aliases: Array.isArray(json.name_aliases) ? json.name_aliases : [],
+      possible_names: Array.isArray(json.possible_names) ? json.possible_names : [],
+
       gender: json.gender || "unknown",
       seasons: Array.isArray(json.seasons) ? json.seasons : [],
       style: Array.isArray(json.style) ? json.style : [],
