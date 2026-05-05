@@ -6,6 +6,10 @@ const { writeReferencePerfumeIntro } = require("../llm/writeReferencePerfumeIntr
 const { buildSearchProfile } = require("../llm/perfumeSearchProfile");
 const { attachReasons } = require("../llm/resultExplainer");
 const { rerankAndExplain } = require("../llm/rerankExplainer");
+const {
+  searchByNameAndKeywords,
+  hasStrongDirectMatch,
+} = require("../search/directNameKeywordSearch");
 
 const { findCandidates } = require("../search/candidateSearch");
 const {
@@ -27,6 +31,18 @@ const adminsStore = require("../storage/adminsStore");
 const usersStore = require("../storage/usersStore");
 
 const modeState = new Map();
+
+const CLOSE_SCORE_DELTA_FOR_UNISEX = Number(
+  process.env.UNISEX_PRIORITY_DELTA || 80,
+);
+
+const MIN_STRICT_SCORE = Number(process.env.SEARCH_MIN_STRICT_SCORE || 8);
+const MIN_RELAXED_SCORE = Number(process.env.SEARCH_MIN_RELAXED_SCORE || 4);
+const APPROX_RANDOM_WINDOW = Number(process.env.APPROX_RANDOM_WINDOW || 30);
+
+/* =========================
+   State helpers
+========================= */
 
 function getTgId(ctx) {
   return ctx.from?.id;
@@ -109,6 +125,10 @@ async function onUserPickAction(ctx) {
   return ctx.reply(PICK_MODE_HELP);
 }
 
+/* =========================
+   Common helpers
+========================= */
+
 function norm(s) {
   return String(s || "")
     .toLowerCase()
@@ -124,6 +144,7 @@ function uniqById(items) {
   for (const item of items || []) {
     const id = Number(item?.id);
     if (!id || seen.has(id)) continue;
+
     seen.add(id);
     out.push(item);
   }
@@ -145,75 +166,91 @@ function safeArray(value) {
   return Array.isArray(value) ? value.filter(Boolean) : [];
 }
 
-function mergeGptReasons(items, gptSelected = []) {
-  const byId = new Map((gptSelected || []).map((x) => [Number(x.id), x]));
-
-  return (items || []).map((item) => {
-    const hit = byId.get(Number(item.id));
-    if (!hit) return item;
-
-    return {
-      ...item,
-      why_selected: Array.isArray(hit.why) ? hit.why : [],
-      assistant_comment: String(hit.assistant_comment || "").trim(),
-      match_type: hit.match_type || "",
-      confidence: typeof hit.confidence === "number" ? hit.confidence : null,
-      best_for_gpt: Array.isArray(hit.best_for) ? hit.best_for : [],
-      projection_fit: hit.projection_fit || "unknown",
-      longevity_fit: hit.longevity_fit || "unknown",
-    };
-  });
+function formatMs(ms) {
+  if (!ms || ms < 1000) return `${ms} мс`;
+  return `${(ms / 1000).toFixed(1)} с`;
 }
 
-function renderMetaComment() {
-  return "";
+function normalizeScore(item) {
+  return Number(item?.match_score || 0);
 }
 
-function hasSearchData(analysis) {
-  return (
-    analysis?.query_type === "reference_perfume" ||
-    analysis?.query_type === "note_search" ||
-    analysis?.query_type === "style_search" ||
-    analysis?.query_type === "code_search" ||
-    safeArray(analysis?.search_terms).length > 0 ||
-    safeArray(analysis?.notes_top).length > 0 ||
-    safeArray(analysis?.notes_heart).length > 0 ||
-    safeArray(analysis?.notes_base).length > 0 ||
-    safeArray(analysis?.style).length > 0 ||
-    safeArray(analysis?.accords).length > 0 ||
-    safeArray(analysis?.intent_context?.best_for).length > 0 ||
-    analysis?.intent_context?.projection !== "unknown" ||
-    analysis?.intent_context?.longevity !== "unknown" ||
-    analysis?.intent_context?.age_group !== "unknown" ||
-    safeArray(analysis?.intent_context?.image_style).length > 0
-  );
+function isPositiveScore(item, minScore = 1) {
+  return normalizeScore(item) >= minScore;
 }
 
-function buildPayloadWithExplanations(item) {
-  const why = Array.isArray(item.why_selected) ? item.why_selected : [];
+function makeSeedFromText(text) {
+  const s = norm(text);
+  let hash = 2166136261;
 
-  const cleanWhy = why
-    .map((x) => String(x || "").trim())
-    .filter(Boolean)
-    .slice(0, 2);
+  for (let i = 0; i < s.length; i += 1) {
+    hash ^= s.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
 
-  return {
-    ...item,
-    assistant_comment: "",
-    match_type: "",
-    confidence: null,
-    best_for_gpt: [],
-    projection_fit: "unknown",
-    longevity_fit: "unknown",
-    short_desc: [
-      String(item.short_desc || "").trim(),
-      cleanWhy.length ? `💡 Чому обрано:\n• ${cleanWhy.join("\n• ")}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n\n")
-      .trim(),
+  return Math.abs(hash >>> 0);
+}
+
+function seededRandom(seed) {
+  let x = Number(seed || 1) || 1;
+
+  return function next() {
+    x += 0x6d2b79f5;
+    let t = x;
+
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+function shuffleWithSeed(items = [], seedText = "") {
+  const arr = [...items];
+  const rnd = seededRandom(makeSeedFromText(seedText));
+
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rnd() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+
+  return arr;
+}
+
+function randomizeApproximatePool(items = [], text = "", windowSize = 30) {
+  const clean = uniqById(items)
+    .filter((x) => normalizeScore(x) > 0)
+    .sort((a, b) => {
+      const diff = normalizeScore(b) - normalizeScore(a);
+      if (diff !== 0) return diff;
+      return Number(a.id || 0) - Number(b.id || 0);
+    });
+
+  if (!clean.length) return [];
+
+  const bestScore = normalizeScore(clean[0]);
+
+  const closeEnough = clean.filter((item) => {
+    const score = normalizeScore(item);
+    return score >= bestScore * 0.65;
+  });
+
+  const pool =
+    closeEnough.length >= 6
+      ? closeEnough.slice(0, windowSize)
+      : clean.slice(0, windowSize);
+
+  const shuffledPool = shuffleWithSeed(pool, text);
+
+  const poolIds = new Set(shuffledPool.map((x) => Number(x.id)));
+  const rest = clean.filter((x) => !poolIds.has(Number(x.id)));
+
+  return [...shuffledPool, ...rest];
+}
+
+/* =========================
+   Gender logic
+========================= */
 
 function detectRequestedGender(text, analysis, searchProfile) {
   const t = norm(text);
@@ -247,100 +284,151 @@ function detectRequestedGender(text, analysis, searchProfile) {
     searchProfile?.for_gender,
   ]
     .filter(Boolean)
-    .map((x) => norm(x));
+    .map((x) => normalizeGenderValue(x));
 
   for (const g of candidates) {
-    if (
-      [
-        "female",
-        "women",
-        "woman",
-        "жіночий",
-        "жіночі",
-        "женский",
-        "женские",
-      ].includes(g)
-    ) {
-      return "female";
-    }
-
-    if (
-      [
-        "male",
-        "men",
-        "man",
-        "чоловічий",
-        "чоловічі",
-        "мужской",
-        "мужские",
-      ].includes(g)
-    ) {
-      return "male";
-    }
-
-    if (["unisex", "унісекс"].includes(g)) {
-      return "unisex";
-    }
+    if (g === "female") return "female";
+    if (g === "male") return "male";
+    if (g === "unisex") return "unisex";
   }
 
   return null;
 }
 
-function isFollowupForMore(text, hasSavedSearch = false) {
-  const t = norm(text);
-  if (!t) return false;
+function getAllowedGenderSet(requestedGender) {
+  const req = normalizeGenderValue(requestedGender);
 
-  if (
-    t === "ще" ||
-    t === "далі" ||
-    t === "ще 3" ||
-    t === "ще 5" ||
-    t === "дай ще" ||
-    t === "дай ще 3" ||
-    t === "дай ще 5" ||
-    t === "покажи ще" ||
-    t === "покажи ще 3" ||
-    t === "покажи ще 5" ||
-    t === "ще варіанти" ||
-    t === "інші варіанти" ||
-    t === "ще аромати" ||
-    t === "ще парфуми"
-  ) {
-    return true;
-  }
+  if (req === "female") return new Set(["female", "unisex"]);
+  if (req === "male") return new Set(["male", "unisex"]);
+  if (req === "unisex") return new Set(["unisex"]);
 
-  if (/\b(ще|далі)\b/.test(t) && /\b\d{1,2}\b/.test(t)) return true;
-  if (/\b(дай|покажи|підбери|знайди)\b/.test(t) && /\b(ще|далі)\b/.test(t)) {
-    return true;
-  }
-  if (hasSavedSearch && /\b(ще|далі)\b/.test(t)) return true;
-
-  return false;
+  return null;
 }
 
-function parseBatchSize(text, fallback = 3) {
-  const t = String(text || "").toLowerCase();
-  const m = t.match(/\b(\d{1,2})\b/);
-  if (!m) return fallback;
+function filterAllowedGender(items = [], requestedGender = null) {
+  const allowed = getAllowedGenderSet(requestedGender);
+  if (!allowed) return items || [];
 
-  const n = Number(m[1]);
-  if (!n || n < 1) return fallback;
-  return Math.min(n, 10);
+  return (items || []).filter((item) =>
+    allowed.has(normalizeGenderValue(item.gender)),
+  );
 }
 
-function reorderWithGptPriority(allItems, gptSelected = []) {
-  if (!Array.isArray(allItems) || !allItems.length) return [];
-  if (!Array.isArray(gptSelected) || !gptSelected.length) return allItems;
+/**
+ * Головне правило:
+ * - спочатку схожість;
+ * - якщо score однаковий або дуже близький, unisex іде вище female/male;
+ * - якщо female/male явно точніший по нотах, він лишається вище.
+ */
+function sortBySimilarityWithUnisexPriority(
+  items = [],
+  requestedGender = null,
+  closeDelta = CLOSE_SCORE_DELTA_FOR_UNISEX,
+) {
+  const req = normalizeGenderValue(requestedGender);
 
-  const selectedIds = gptSelected.map((x) => Number(x.id));
-  const selectedSet = new Set(selectedIds);
+  return uniqById(items).sort((a, b) => {
+    const as = normalizeScore(a);
+    const bs = normalizeScore(b);
+    const diff = bs - as;
 
-  const prioritized = selectedIds
-    .map((id) => allItems.find((x) => Number(x.id) === id))
-    .filter(Boolean);
+    const aGender = normalizeGenderValue(a.gender);
+    const bGender = normalizeGenderValue(b.gender);
 
-  const rest = allItems.filter((x) => !selectedSet.has(Number(x.id)));
-  return uniqById([...prioritized, ...rest]);
+    const canPreferUnisex =
+      req === "female" || req === "male" || req === "unknown" || !req;
+
+    const scoreIsClose = Math.abs(as - bs) <= closeDelta;
+
+    if (canPreferUnisex && scoreIsClose && aGender !== bGender) {
+      if (aGender === "unisex") return -1;
+      if (bGender === "unisex") return 1;
+    }
+
+    if (diff !== 0) return diff;
+
+    return Number(a.id || 0) - Number(b.id || 0);
+  });
+}
+
+/* =========================
+   Messages / payload
+========================= */
+
+function mergeGptReasons(items, gptSelected = []) {
+  const byId = new Map((gptSelected || []).map((x) => [Number(x.id), x]));
+
+  return (items || []).map((item) => {
+    const hit = byId.get(Number(item.id));
+    if (!hit) return item;
+
+    return {
+      ...item,
+      why_selected: Array.isArray(hit.why) ? hit.why : [],
+      assistant_comment: String(hit.assistant_comment || "").trim(),
+      match_type: hit.match_type || "",
+      confidence: typeof hit.confidence === "number" ? hit.confidence : null,
+      best_for_gpt: Array.isArray(hit.best_for) ? hit.best_for : [],
+      projection_fit: hit.projection_fit || "unknown",
+      longevity_fit: hit.longevity_fit || "unknown",
+    };
+  });
+}
+
+function buildPayloadWithExplanations(item) {
+  const why = Array.isArray(item.why_selected) ? item.why_selected : [];
+
+  const cleanWhy = why
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .slice(0, 2);
+
+  return {
+    ...item,
+    assistant_comment: "",
+    match_type: "",
+    confidence: null,
+    best_for_gpt: [],
+    projection_fit: "unknown",
+    longevity_fit: "unknown",
+    short_desc: [
+      String(item.short_desc || "").trim(),
+      cleanWhy.length ? `💡 Чому обрано:\n• ${cleanWhy.join("\n• ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+      .trim(),
+  };
+}
+
+function buildApproximateNoExactReply(analysis, searchProfile) {
+  const terms = uniqStrings([
+    ...safeArray(analysis?.search_terms),
+    ...safeArray(analysis?.notes_top),
+    ...safeArray(analysis?.notes_heart),
+    ...safeArray(analysis?.notes_base),
+    ...safeArray(analysis?.accords),
+    ...safeArray(analysis?.style),
+    ...safeArray(searchProfile?.notes_include),
+    ...safeArray(searchProfile?.notes_prefer),
+    ...safeArray(searchProfile?.accords),
+    ...safeArray(searchProfile?.style_tags),
+  ]).slice(0, 8);
+
+  const tail = terms.length
+    ? `\n\nAI розібрав запит як: ${terms.join(", ")}.`
+    : "";
+
+  return (
+    "ℹ️ Точного збігу в базі не знайшов.\n" +
+    "Перевірив назву, ноти, ключові слова, опис і стиль аромату.\n" +
+    "Показую приблизно схожі варіанти з бази — не точний збіг, а найближчий напрям." +
+    tail
+  );
+}
+
+function renderMetaComment() {
+  return "";
 }
 
 async function createProgressMessage(ctx, text) {
@@ -364,11 +452,6 @@ async function updateProgressMessage(ctx, progressMsg, text) {
   } catch {}
 }
 
-function formatMs(ms) {
-  if (!ms || ms < 1000) return `${ms} мс`;
-  return `${(ms / 1000).toFixed(1)} с`;
-}
-
 async function sendItemsBatch(ctx, items) {
   const sent = [];
   const failed = [];
@@ -376,10 +459,12 @@ async function sendItemsBatch(ctx, items) {
   for (const item of items) {
     try {
       const payload = buildPayloadWithExplanations(item);
+
       await sendPerfumeCard(ctx, payload, {
         notes: true,
         season: false,
       });
+
       sent.push(item);
     } catch (e) {
       console.error(
@@ -388,6 +473,7 @@ async function sendItemsBatch(ctx, items) {
         item?.name,
         e?.message || e,
       );
+
       failed.push(item);
     }
   }
@@ -395,10 +481,23 @@ async function sendItemsBatch(ctx, items) {
   return { sent, failed };
 }
 
+/* =========================
+   Search helpers
+========================= */
+
 function makeProfileWithGender(searchProfile, gender) {
   return {
     ...(searchProfile || {}),
     gender,
+  };
+}
+
+function makeComparableSimilarityProfile(searchProfile) {
+  return {
+    ...(searchProfile || {}),
+    // gender не дає бонус у score.
+    // Стать працює тільки як allowed-filter.
+    gender: "unknown",
   };
 }
 
@@ -410,33 +509,10 @@ function runFullDbSearch(searchProfile, gender, limit = 120) {
   return findCandidates(profile, limit);
 }
 
-/**
- * Робимо профіль для чесного порівняння схожості.
- *
- * Чому gender = "unknown":
- * - стать не має давати штучний бонус у match_score;
- * - стать має бути тільки фільтром дозволених категорій;
- * - так unisex з кращими нотами може стати вище female/male.
- */
-function makeComparableSimilarityProfile(searchProfile) {
-  return {
-    ...(searchProfile || {}),
-    gender: "unknown",
-  };
-}
-
-/**
- * Пошук по дозволених статях.
- *
- * female-запит => female + unisex
- * male-запит   => male + unisex
- * unisex       => тільки unisex
- *
- * Порядок формується за match_score, тобто за схожістю нот/опису/акордів.
- */
 function runAllowedGenderSimilaritySearch(
   searchProfile,
   allowedGenders = [],
+  requestedGender = null,
   limit = 120,
 ) {
   const allowed = new Set(
@@ -458,7 +534,10 @@ function runAllowedGenderSimilaritySearch(
     return allowed.has(itemGender);
   });
 
-  return uniqById(filtered).slice(0, limit);
+  return sortBySimilarityWithUnisexPriority(
+    uniqById(filtered),
+    requestedGender,
+  ).slice(0, limit);
 }
 
 function extractUsefulTokens(text) {
@@ -474,7 +553,6 @@ function extractUsefulTokens(text) {
     "ця",
     "такий",
     "така",
-    "такий",
     "користуюсь",
     "користуюся",
     "підкажи",
@@ -483,6 +561,7 @@ function extractUsefulTokens(text) {
     "щось",
     "схоже",
     "аромат",
+    "аромату",
     "парфум",
     "парфюмом",
     "парфумом",
@@ -502,7 +581,7 @@ function extractUsefulTokens(text) {
 
   return uniqStrings(
     String(text || "")
-      .replace(/["'“”‘’()\[\],.!?:;\\/]+/g, " ")
+      .replace(/["'“”‘’()[\],.!?:;\\/]+/g, " ")
       .split(/\s+/)
       .map((x) => x.trim())
       .filter((x) => x.length >= 3)
@@ -537,94 +616,76 @@ function createRelaxedSearchProfile(searchProfile, analysis, userText) {
       ...safeArray(analysis?.notes_heart),
       ...safeArray(analysis?.notes_base),
     ]).slice(0, 18),
+
     notes_prefer: uniqStrings([
       ...safeArray(searchProfile?.notes_prefer),
       ...safeArray(analysis?.notes_top),
       ...safeArray(analysis?.notes_heart),
       ...safeArray(analysis?.notes_base),
     ]).slice(0, 18),
+
     accords: uniqStrings([
       ...safeArray(searchProfile?.accords),
       ...safeArray(analysis?.accords),
       ...safeArray(analysis?.style),
     ]).slice(0, 18),
+
     style_tags: uniqStrings([
       ...safeArray(searchProfile?.style_tags),
       ...safeArray(analysis?.style),
       ...safeArray(analysis?.accords),
     ]).slice(0, 18),
+
     raw_terms: rawTerms,
   };
 }
 
-function buildGenderPoolsFromFullDb(text, analysis, searchProfile) {
+function filterMeaningfulItems(items = [], minScore = 1) {
+  return uniqById(items).filter((item) => isPositiveScore(item, minScore));
+}
+
+function buildGenderPoolsFromFullDb(text, analysis, searchProfile, options = {}) {
   const requestedGender = detectRequestedGender(text, analysis, searchProfile);
-  const limit = SEARCH.LIMIT_CANDIDATES || 100;
+  const limit = options.limit || SEARCH.LIMIT_CANDIDATES || 100;
+  const minScore = options.minScore || 1;
+
+  let allItems = [];
 
   if (!requestedGender) {
-    const allItems = runFullDbSearch(searchProfile, null, limit);
-
-    return {
-      requestedGender: null,
-      primaryItems: uniqById(allItems),
-      fallbackItems: [],
-      allItems: uniqById(allItems),
-      usedFallback: false,
-    };
-  }
-
-  if (requestedGender === "female") {
-    const allowedItems = runAllowedGenderSimilaritySearch(
+    allItems = runFullDbSearch(searchProfile, null, limit);
+  } else if (requestedGender === "female") {
+    allItems = runAllowedGenderSimilaritySearch(
       searchProfile,
       ["female", "unisex"],
+      requestedGender,
       limit,
     );
-
-    return {
-      requestedGender,
-      primaryItems: uniqById(allowedItems),
-      fallbackItems: [],
-      allItems: uniqById(allowedItems),
-      usedFallback: false,
-    };
-  }
-
-  if (requestedGender === "male") {
-    const allowedItems = runAllowedGenderSimilaritySearch(
+  } else if (requestedGender === "male") {
+    allItems = runAllowedGenderSimilaritySearch(
       searchProfile,
       ["male", "unisex"],
+      requestedGender,
       limit,
     );
-
-    return {
-      requestedGender,
-      primaryItems: uniqById(allowedItems),
-      fallbackItems: [],
-      allItems: uniqById(allowedItems),
-      usedFallback: false,
-    };
-  }
-
-  if (requestedGender === "unisex") {
-    const unisexItems = runAllowedGenderSimilaritySearch(
+  } else if (requestedGender === "unisex") {
+    allItems = runAllowedGenderSimilaritySearch(
       searchProfile,
       ["unisex"],
+      requestedGender,
       limit,
     );
-
-    return {
-      requestedGender,
-      primaryItems: uniqById(unisexItems),
-      fallbackItems: [],
-      allItems: uniqById(unisexItems),
-      usedFallback: false,
-    };
+  } else {
+    allItems = runFullDbSearch(searchProfile, null, limit);
   }
 
-  const allItems = runFullDbSearch(searchProfile, null, limit);
+  allItems = filterAllowedGender(allItems, requestedGender);
+  allItems = sortBySimilarityWithUnisexPriority(
+    filterMeaningfulItems(allItems, minScore),
+    requestedGender,
+  );
 
   return {
-    requestedGender: null,
+    requestedGender,
     primaryItems: uniqById(allItems),
     fallbackItems: [],
     allItems: uniqById(allItems),
@@ -632,13 +693,88 @@ function buildGenderPoolsFromFullDb(text, analysis, searchProfile) {
   };
 }
 
+async function runSearchWithFallbackProfiles({ text, analysis, searchProfile }) {
+  const strictPools = buildGenderPoolsFromFullDb(text, analysis, searchProfile, {
+    minScore: MIN_STRICT_SCORE,
+  });
+
+  if (strictPools.allItems?.length) {
+    return {
+      ...strictPools,
+      searchProfileUsed: searchProfile,
+      searchMode: "strict",
+      approximate: false,
+    };
+  }
+
+  const relaxedProfile = createRelaxedSearchProfile(searchProfile, analysis, text);
+  const relaxedPools = buildGenderPoolsFromFullDb(text, analysis, relaxedProfile, {
+    minScore: MIN_RELAXED_SCORE,
+  });
+
+  if (relaxedPools.allItems?.length) {
+    const randomizedItems = randomizeApproximatePool(
+      relaxedPools.allItems,
+      text,
+      APPROX_RANDOM_WINDOW,
+    );
+
+    return {
+      ...relaxedPools,
+      primaryItems: randomizedItems,
+      allItems: randomizedItems,
+      searchProfileUsed: relaxedProfile,
+      searchMode: "relaxed",
+      approximate: true,
+    };
+  }
+
+  const broadProfile = {
+    ...relaxedProfile,
+    gender: "unknown",
+    exclude_tags: [],
+    best_for: safeArray(relaxedProfile?.best_for),
+  };
+
+  const broadPools = buildGenderPoolsFromFullDb(text, analysis, broadProfile, {
+    minScore: 1,
+  });
+
+  if (broadPools.allItems?.length) {
+    const randomizedItems = randomizeApproximatePool(
+      broadPools.allItems,
+      text,
+      APPROX_RANDOM_WINDOW,
+    );
+
+    return {
+      ...broadPools,
+      primaryItems: randomizedItems,
+      allItems: randomizedItems,
+      searchProfileUsed: broadProfile,
+      searchMode: "broad",
+      approximate: true,
+    };
+  }
+
+  return {
+    ...broadPools,
+    searchProfileUsed: broadProfile,
+    searchMode: "empty",
+    approximate: true,
+  };
+}
+
+/* =========================
+   Reference intro
+========================= */
+
 function isSpecificReferencePerfume(analysis) {
   const target = String(analysis?.target_name || "").trim();
   const brand = String(analysis?.brand || "").trim();
 
   if (!target) return false;
   if (brand && norm(target) === norm(brand)) return false;
-
   if (target.split(/\s+/).length >= 2) return true;
 
   if (
@@ -723,7 +859,7 @@ async function sendReferenceIntro(ctx, text, analysis) {
       return;
     }
   } catch (e) {
-    console.error("writeReferencePerfumeIntro error:", e);
+    console.error("writeReferencePerfumeIntro error:", e?.message || e);
   }
 
   const fallback = buildReferenceFallbackIntro(analysis);
@@ -735,27 +871,76 @@ async function sendReferenceIntro(ctx, text, analysis) {
   }
 }
 
-async function enrichAndRankItems({ items, text, analysis, searchProfile }) {
+/* =========================
+   Ranking
+========================= */
+
+function reorderWithGptPriority(allItems, gptSelected = []) {
+  if (!Array.isArray(allItems) || !allItems.length) return [];
+  if (!Array.isArray(gptSelected) || !gptSelected.length) return allItems;
+
+  const selectedIds = gptSelected.map((x) => Number(x.id));
+  const selectedSet = new Set(selectedIds);
+
+  const prioritized = selectedIds
+    .map((id) => allItems.find((x) => Number(x.id) === id))
+    .filter(Boolean);
+
+  const rest = allItems.filter((x) => !selectedSet.has(Number(x.id)));
+
+  return uniqById([...prioritized, ...rest]);
+}
+
+async function enrichAndRankItems({
+  items,
+  text,
+  analysis,
+  searchProfile,
+  requestedGender = null,
+  approximate = false,
+}) {
   let allItems = Array.isArray(items) ? uniqById(items) : [];
   if (!allItems.length) return [];
 
-  allItems = rerankTopK(allItems, searchProfile, analysis?.target_name, 25);
+  allItems = filterAllowedGender(allItems, requestedGender);
 
-  try {
-    const gptSelected = await rerankAndExplain({
-      userText: text,
-      analysis,
-      searchProfile,
-      candidates: allItems.slice(0, 6),
-      topK: Math.min(6, allItems.length),
-    });
+  allItems = rerankTopK(
+    allItems,
+    {
+      ...(searchProfile || {}),
+      // Для чесного rerank стать не має давати бонус.
+      gender: "unknown",
+    },
+    analysis?.target_name,
+    25,
+  );
 
-    if (Array.isArray(gptSelected) && gptSelected.length) {
-      allItems = mergeGptReasons(allItems, gptSelected);
-      allItems = reorderWithGptPriority(allItems, gptSelected);
+  allItems = sortBySimilarityWithUnisexPriority(allItems, requestedGender);
+
+  if (approximate) {
+    allItems = randomizeApproximatePool(allItems, text, 18);
+  }
+
+  // Для approximate fallback не даємо GPT повністю переставляти список,
+  // щоб не повертатися до одного й того самого першого аромату.
+  if (!approximate) {
+    try {
+      const gptSelected = await rerankAndExplain({
+        userText: text,
+        analysis,
+        searchProfile,
+        candidates: allItems.slice(0, 6),
+        topK: Math.min(6, allItems.length),
+      });
+
+      if (Array.isArray(gptSelected) && gptSelected.length) {
+        allItems = mergeGptReasons(allItems, gptSelected);
+        allItems = reorderWithGptPriority(allItems, gptSelected);
+        allItems = sortBySimilarityWithUnisexPriority(allItems, requestedGender);
+      }
+    } catch (e) {
+      console.error("rerankAndExplain error:", e?.message || e);
     }
-  } catch (e) {
-    console.error("rerankAndExplain error:", e);
   }
 
   allItems = attachReasons(allItems, searchProfile);
@@ -764,42 +949,57 @@ async function enrichAndRankItems({ items, text, analysis, searchProfile }) {
   return allItems;
 }
 
-async function runSearchWithFallbackProfiles({ text, analysis, searchProfile }) {
-  const strictPools = buildGenderPoolsFromFullDb(text, analysis, searchProfile);
+/* =========================
+   More results flow
+========================= */
 
-  if (strictPools.allItems?.length) {
-    return {
-      ...strictPools,
-      searchProfileUsed: searchProfile,
-      searchMode: "strict",
-    };
+function isFollowupForMore(text, hasSavedSearch = false) {
+  const t = norm(text);
+  if (!t) return false;
+
+  if (
+    t === "ще" ||
+    t === "далі" ||
+    t === "ще 3" ||
+    t === "ще 5" ||
+    t === "дай ще" ||
+    t === "дай ще 3" ||
+    t === "дай ще 5" ||
+    t === "покажи ще" ||
+    t === "покажи ще 3" ||
+    t === "покажи ще 5" ||
+    t === "ще варіанти" ||
+    t === "інші варіанти" ||
+    t === "ще аромати" ||
+    t === "ще парфуми"
+  ) {
+    return true;
   }
 
-  const relaxedProfile = createRelaxedSearchProfile(searchProfile, analysis, text);
-  const relaxedPools = buildGenderPoolsFromFullDb(text, analysis, relaxedProfile);
+  if (/\b(ще|далі)\b/.test(t) && /\b\d{1,2}\b/.test(t)) return true;
 
-  if (relaxedPools.allItems?.length) {
-    return {
-      ...relaxedPools,
-      searchProfileUsed: relaxedProfile,
-      searchMode: "relaxed",
-    };
+  if (
+    /\b(дай|покажи|підбери|знайди)\b/.test(t) &&
+    /\b(ще|далі)\b/.test(t)
+  ) {
+    return true;
   }
 
-  const broadProfile = {
-    ...relaxedProfile,
-    gender: "unknown",
-    exclude_tags: [],
-    best_for: safeArray(relaxedProfile?.best_for),
-  };
+  if (hasSavedSearch && /\b(ще|далі)\b/.test(t)) return true;
 
-  const broadPools = buildGenderPoolsFromFullDb(text, analysis, broadProfile);
+  return false;
+}
 
-  return {
-    ...broadPools,
-    searchProfileUsed: broadProfile,
-    searchMode: broadPools.allItems?.length ? "broad" : "empty",
-  };
+function parseBatchSize(text, fallback = 3) {
+  const t = String(text || "").toLowerCase();
+  const m = t.match(/\b(\d{1,2})\b);
+
+  if (!m) return fallback;
+
+  const n = Number(m[1]);
+  if (!n || n < 1) return fallback;
+
+  return Math.min(n, 10);
 }
 
 async function sendNextBatchFromState(ctx, saved, text = "") {
@@ -812,7 +1012,11 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
 
   const batchSize = parseBatchSize(text, 3);
   const sentIds = Array.isArray(saved.sentIds) ? saved.sentIds : [];
-  const primaryItems = Array.isArray(saved.primaryItems) ? saved.primaryItems : [];
+
+  const primaryItems = Array.isArray(saved.primaryItems)
+    ? saved.primaryItems
+    : [];
+
   const fallbackItems = Array.isArray(saved.fallbackItems)
     ? saved.fallbackItems
     : [];
@@ -885,6 +1089,57 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
   return true;
 }
 
+/* =========================
+   Main text handler
+========================= */
+
+async function sendCodeMatches(ctx, text) {
+  if (!looksLikePerfumeCode(text)) return false;
+
+  const code = normalizeCode(text);
+  const byExactCode = findByNumberCode(code);
+
+  if (byExactCode) {
+    clearLastSearch(ctx);
+    await ctx.reply(`✅ Знайшов аромат за кодом ${code}:`);
+    await sendPerfumeCard(ctx, byExactCode, { notes: true, season: true });
+    return true;
+  }
+
+  const numericCode = extractNumericCode(code);
+  const numericMatches = findAllByNumericCode(numericCode);
+
+  if (numericMatches.length) {
+    clearLastSearch(ctx);
+
+    await ctx.reply(
+      `✅ Знайшов ${numericMatches.length} варіанти за номером ${numericCode}:`,
+    );
+
+    const batch = numericMatches.slice(0, 5);
+    await sendItemsBatch(ctx, batch);
+
+    if (numericMatches.length > batch.length) {
+      setLastSearch(ctx, {
+        query: text,
+        primaryItems: numericMatches,
+        fallbackItems: [],
+        sentIds: batch.map((x) => x.id),
+        requestedGender: null,
+        approximate: false,
+      });
+
+      await ctx.reply(
+        `➡️ Є ще ${numericMatches.length - batch.length} варіантів. Напишіть: "ще"`,
+      );
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
 async function onUserText(ctx) {
   const mode = getMode(ctx);
   if (mode !== "pick") return false;
@@ -900,353 +1155,241 @@ async function onUserText(ctx) {
 
   incrementSearchCounterForActor(ctx);
 
-  const exactByName = findByExactName(text);
+  const handledCode = await sendCodeMatches(ctx, text);
+if (handledCode) return true;
 
-  if (exactByName) {
-    clearLastSearch(ctx);
-    await ctx.reply(`✅ Знайшов точний збіг за назвою ${exactByName.name}:`);
-    await sendPerfumeCard(ctx, exactByName, { notes: true, season: true });
-    return true;
-  }
+/**
+ * Direct name / keywords search.
+ *
+ * Це перший рівень пошуку:
+ * - назва
+ * - keywords
+ * - version
+ * - description
+ * - notes
+ *
+ * Приклад:
+ * "Габа" →
+ * 1. точний GABA / Габа
+ * 2. Hormone GABA
+ * 3. слабші збіги типу Gabbana
+ */
+const directMatches = searchByNameAndKeywords(text, {
+  limit: SEARCH.LIMIT_CANDIDATES || 100,
+  minScore: 1200,
+});
 
-  if (looksLikePerfumeCode(text)) {
-    const code = normalizeCode(text);
-    const byExactCode = findByNumberCode(code);
+if (hasStrongDirectMatch(directMatches)) {
+  clearLastSearch(ctx);
 
-    if (byExactCode) {
-      clearLastSearch(ctx);
-      await ctx.reply(`✅ Знайшов аромат за кодом ${code}:`);
-      await sendPerfumeCard(ctx, byExactCode, { notes: true, season: true });
-      return true;
-    }
+  const firstBatch = directMatches.slice(0, 3);
 
-    const num = extractNumericCode(code);
+  await ctx.reply(
+    `✅ Знайшов ${directMatches.length} варіанти за назвою / ключовими словами.\n\nСпочатку показую 100% збіги, далі — менш точні.`,
+  );
 
-    if (num) {
-      const byNumeric = findAllByNumericCode(num);
+  const { sent, failed } = await sendItemsBatch(ctx, firstBatch);
 
-      if (byNumeric.length === 1) {
-        clearLastSearch(ctx);
-        await ctx.reply(
-          `✅ Знайшов аромат за номером ${num}. У базі він записаний як ${byNumeric[0].number_code}:`,
-        );
-        await sendPerfumeCard(ctx, byNumeric[0], {
-          notes: true,
-          season: true,
-        });
-        return true;
-      }
-
-      if (byNumeric.length > 1) {
-        const top = byNumeric.slice(0, 5);
-
-        const listText =
-          `🔎 За номером ${num} знайшов кілька варіантів:\n\n` +
-          top
-            .map((item, i) => `${i + 1}. ${item.number_code || "—"} — ${item.name}`)
-            .join("\n") +
-          `\n\n✍️ Напишіть точний код з буквою, наприклад: ${
-            top[0]?.number_code || `${num}A`
-          }`;
-
-        await ctx.reply(listText);
-        return true;
-      }
-    }
-
-    await ctx.reply(
-      `❌ Не знайшов аромат з кодом ${code}.\n\nСпробуйте:\n• інший код\n• назву аромату\n• ноти\n• або стиль`,
+  if (failed.length) {
+    console.error(
+      "Direct search failed items:",
+      failed.map((x) => ({ id: x.id, name: x.name })),
     );
-
-    return true;
   }
+
+  const sentIds = sent.map((x) => x.id);
+
+  setLastSearch(ctx, {
+    query: text,
+    analysis: null,
+    searchProfile: null,
+    requestedGender: null,
+    searchMode: "direct_name_keyword",
+    approximate: false,
+
+    primaryItems: directMatches,
+    fallbackItems: [],
+    sentIds,
+    offset: sentIds.length,
+  });
+
+  const left = directMatches.length - sentIds.length;
+
+  if (left > 0) {
+    await ctx.reply(`➡️ Є ще ${left} варіантів. Напишіть: "ще" або "дай ще 3"`);
+  } else {
+    await ctx.reply("✅ Це всі знайдені варіанти за цим запитом.");
+  }
+
+  return true;
+}
+
+// Якщо точного direct-збігу немає, але старий exactByName щось знайшов — показуємо його.
+const exactByName = findByExactName(text);
+
+if (exactByName) {
+  clearLastSearch(ctx);
+  await ctx.reply(`✅ Знайшов точний збіг за назвою ${exactByName.name}:`);
+  await sendPerfumeCard(ctx, exactByName, { notes: true, season: true });
+  return true;
+}
 
   const startedAt = Date.now();
 
   const progressMsg = await createProgressMessage(
     ctx,
-    "🔎 Пошук запущено...\n\n1/5 Аналізую запит",
+    "🔎 AI-підбір запущено...\n\n1/5 Перевіряю базу\n2/5 Аналізую запит як парфумерний консультант",
   );
 
-  try {
-    await ctx.sendChatAction("typing");
-  } catch {}
-
-  let analysis;
+  let analysis = null;
+  let searchProfile = null;
+  let searchResult = null;
+  let allItems = [];
 
   try {
     analysis = await analyzePerfumeIntent(text);
-  } catch (e) {
-    console.error("analyzePerfumeIntent error:", e);
-    await updateProgressMessage(ctx, progressMsg, "❌ Не вдалося проаналізувати запит.");
-    await ctx.reply("❌ Не вдалося проаналізувати запит.");
-    return true;
-  }
 
-  if (!hasSearchData(analysis)) {
-    await updateProgressMessage(ctx, progressMsg, "ℹ️ Запит недостатньо конкретний.");
-    await ctx.reply(
-      analysis?.user_friendly_reply ||
-        "🤔 Не до кінця зрозумів запит.\n\nНапишіть:\n• назву аромату\n• код\n• ноти\n• стиль\n• або ситуацію використання",
-    );
-    return true;
-  }
-
-  await sendReferenceIntro(ctx, text, analysis);
-
-  await updateProgressMessage(
-    ctx,
-    progressMsg,
-    "🔎 Пошук запущено...\n\n1/5 Запит розібрано\n2/5 Будую профіль пошуку",
-  );
-
-  try {
-    await ctx.sendChatAction("typing");
-  } catch {}
-
-  let searchProfile;
-
-  try {
-    searchProfile = await buildSearchProfile(analysis);
-  } catch (e) {
-    console.error("buildSearchProfile error:", e);
     await updateProgressMessage(
       ctx,
       progressMsg,
-      "❌ Не вдалося побудувати профіль пошуку.",
+      "🔎 AI-підбір запущено...\n\n1/5 БД перевірено\n2/5 Запит розібрано\n3/5 Будую пошуковий профіль",
     );
-    await ctx.reply("❌ Не вдалося побудувати профіль пошуку.");
-    return true;
-  }
 
-  await updateProgressMessage(
-    ctx,
-    progressMsg,
-    "🔎 Пошук запущено...\n\n1/5 Запит розібрано\n2/5 Профіль побудовано\n3/5 Шукаю кандидати в базі",
-  );
+    searchProfile = await buildSearchProfile(analysis);
 
-  try {
-    await ctx.sendChatAction("typing");
-  } catch {}
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      "🔎 AI-підбір запущено...\n\n1/5 БД перевірено\n2/5 Запит розібрано\n3/5 Профіль готовий\n4/5 Шукаю в базі",
+    );
 
-  let searchPools;
-
-  try {
-    searchPools = await runSearchWithFallbackProfiles({
+    searchResult = await runSearchWithFallbackProfiles({
       text,
       analysis,
       searchProfile,
     });
 
-    console.log("SEARCH DEBUG", {
-      userText: text,
-      requestedGender: searchPools?.requestedGender || null,
-      primaryCount: Array.isArray(searchPools?.primaryItems)
-        ? searchPools.primaryItems.length
-        : 0,
-      fallbackCount: Array.isArray(searchPools?.fallbackItems)
-        ? searchPools.fallbackItems.length
-        : 0,
-      allCount: Array.isArray(searchPools?.allItems)
-        ? searchPools.allItems.length
-        : 0,
-      analysisQueryType: analysis?.query_type || null,
-      searchProfileGender: searchProfile?.gender || null,
-      searchMode: searchPools?.searchMode || null,
-      targetName: analysis?.target_name || null,
-      brand: analysis?.brand || null,
-    });
-  } catch (e) {
-    console.error("runSearchWithFallbackProfiles error:", e);
-    await updateProgressMessage(ctx, progressMsg, "❌ Помилка пошуку в базі.");
-    await ctx.reply("❌ Помилка пошуку в базі.");
-    return true;
-  }
+    const activeProfile = searchResult.searchProfileUsed || searchProfile;
 
-  const requestedGender = searchPools.requestedGender;
-  const usedFallback = Boolean(searchPools.usedFallback);
-  const effectiveSearchProfile = searchPools.searchProfileUsed || searchProfile;
+    if (!searchResult.allItems?.length) {
+      clearLastSearch(ctx);
 
-  let primaryItems = [];
-  let fallbackItems = [];
-
-  await updateProgressMessage(
-    ctx,
-    progressMsg,
-    "🔎 Пошук запущено...\n\n1/5 Запит розібрано\n2/5 Профіль побудовано\n3/5 Кандидати знайдені\n4/5 Роблю фінальний відбір",
-  );
-
-  try {
-    await ctx.sendChatAction("typing");
-  } catch {}
-
-  try {
-    primaryItems = await enrichAndRankItems({
-      items: searchPools.primaryItems,
-      text,
-      analysis,
-      searchProfile: effectiveSearchProfile,
-    });
-
-    if (!primaryItems.length) {
-      fallbackItems = await enrichAndRankItems({
-        items: searchPools.fallbackItems,
-        text,
-        analysis,
-        searchProfile: effectiveSearchProfile,
-      });
-    }
-  } catch (e) {
-    console.error("enrichAndRankItems error:", e);
-    await updateProgressMessage(ctx, progressMsg, "❌ Помилка фінального відбору.");
-    await ctx.reply("❌ Помилка фінального відбору.");
-    return true;
-  }
-
-  const allItems = uniqById(primaryItems.length ? primaryItems : fallbackItems);
-
-  if (!allItems.length) {
-    if (
-      analysis?.query_type === "reference_perfume" &&
-      !isSpecificReferencePerfume(analysis)
-    ) {
       await updateProgressMessage(
         ctx,
         progressMsg,
-        "😔 Конкретних збігів не знайдено.",
+        `✅ AI-підбір завершено за ${formatMs(Date.now() - startedAt)}`,
       );
+
       await ctx.reply(
-        "😔 Не знайшов переконливих аналогів, бо в запиті немає точної назви аромату. Напишіть повну модель, наприклад: Black Opium, Libre, Y, La Nuit de L'Homme — тоді підбір буде набагато точнішим.",
+        "😔 Вдалих збігів не знайдено.\n\nЯ перевірив назву, ноти, ключові слова, опис і стиль аромату, але в базі немає навіть приблизно релевантного напряму.",
       );
+
       return true;
     }
 
-    if (requestedGender === "female") {
-      await updateProgressMessage(
-        ctx,
-        progressMsg,
-        "❌ Жіночі або унісекс варіанти не знайдено.",
-      );
-      await ctx.reply(
-        "❌ Не знайшов жіночих або унісекс ароматів за цим запитом. Уточніть ноти або стиль.",
-      );
-      return true;
+    if (searchResult.approximate) {
+      await ctx.reply(buildApproximateNoExactReply(analysis, activeProfile));
     }
 
-    if (requestedGender === "male") {
-      await updateProgressMessage(
-        ctx,
-        progressMsg,
-        "❌ Чоловічі або унісекс варіанти не знайдено.",
-      );
-      await ctx.reply(
-        "❌ Не знайшов чоловічих або унісекс ароматів за цим запитом. Уточніть ноти або стиль.",
-      );
-      return true;
+    if (analysis?.query_type === "reference_perfume") {
+      await sendReferenceIntro(ctx, text, analysis);
+    } else if (!searchResult.approximate && analysis?.user_friendly_reply) {
+      await ctx.reply(`✨ ${analysis.user_friendly_reply}`);
     }
 
-    if (requestedGender === "unisex") {
-      await updateProgressMessage(
-        ctx,
-        progressMsg,
-        "❌ Унісекс варіанти не знайдено.",
-      );
-      await ctx.reply(
-        "❌ За запитом не знайшов відповідних унісекс ароматів. Уточніть ноти або стиль.",
-      );
-      return true;
-    }
-
-    await updateProgressMessage(ctx, progressMsg, "😔 Вдалих збігів не знайдено.");
-    await ctx.reply(
-      "😔 У базі поки не знайшов вдалих збігів.\n\nМожете уточнити:\n• для кого аромат\n• які ноти\n• який стиль\n• на яку ситуацію\n• який шлейф або стійкість",
-    );
-    return true;
-  }
-
-  setLastSearch(ctx, {
-    originalText: text,
-    analysis,
-    searchProfile: effectiveSearchProfile,
-    requestedGender,
-    primaryItems,
-    fallbackItems,
-    allItems,
-    offset: 0,
-    sentIds: [],
-    usedFallback,
-  });
-
-  const firstPool = primaryItems.length ? primaryItems : fallbackItems;
-  const firstBatch = firstPool.slice(0, 3);
-
-  if (!firstBatch.length) {
     await updateProgressMessage(
       ctx,
       progressMsg,
-      "❌ Не вдалося сформувати першу видачу.",
+      "🔎 AI-підбір запущено...\n\n1/5 БД перевірено\n2/5 Запит розібрано\n3/5 Профіль готовий\n4/5 Кандидати знайдені\n5/5 Роблю фінальний відбір",
     );
-    await ctx.reply("❌ Не вдалося сформувати першу видачу.");
+
+    allItems = await enrichAndRankItems({
+      items: searchResult.allItems,
+      text,
+      analysis,
+      searchProfile: activeProfile,
+      requestedGender: searchResult.requestedGender,
+      approximate: Boolean(searchResult.approximate),
+    });
+
+    if (!allItems.length) {
+      clearLastSearch(ctx);
+
+      await updateProgressMessage(
+        ctx,
+        progressMsg,
+        `✅ AI-підбір завершено за ${formatMs(Date.now() - startedAt)}`,
+      );
+
+      await ctx.reply("😔 Вдалих збігів не знайдено.");
+      return true;
+    }
+
+    const firstBatch = allItems.slice(0, 3);
+
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      `✅ AI-підбір завершено за ${formatMs(Date.now() - startedAt)}`,
+    );
+
+    if (searchResult.approximate) {
+      await ctx.reply("✨ Підібрав 3 приблизно схожі варіанти з бази:");
+    } else {
+      await ctx.reply("✨ Підібрав 3 найбільш схожі варіанти:");
+    }
+
+    const { sent, failed } = await sendItemsBatch(ctx, firstBatch);
+
+    if (failed.length) {
+      console.error(
+        "First batch failed items:",
+        failed.map((x) => ({ id: x.id, name: x.name })),
+      );
+    }
+
+    const sentIds = sent.map((x) => x.id);
+
+    setLastSearch(ctx, {
+      query: text,
+      analysis,
+      searchProfile: activeProfile,
+      requestedGender: searchResult.requestedGender,
+      searchMode: searchResult.searchMode,
+      approximate: Boolean(searchResult.approximate),
+
+      primaryItems: allItems,
+      fallbackItems: [],
+      sentIds,
+      offset: sentIds.length,
+    });
+
+    const left = allItems.length - sentIds.length;
+
+    if (left > 0) {
+      await ctx.reply(`➡️ Є ще ${left} варіантів. Напишіть: "ще" або "дай ще 3"`);
+    } else {
+      await ctx.reply("✅ Це всі знайдені варіанти за цим запитом.");
+    }
+
+    return true;
+  } catch (e) {
+    console.error("onUserText perfume search error:", e?.message || e);
+
+    clearLastSearch(ctx);
+
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      `⚠️ Помилка підбору після ${formatMs(Date.now() - startedAt)}`,
+    );
+
+    await ctx.reply(
+      "⚠️ Не вдалося виконати підбір. Спробуйте коротший запит або повторіть ще раз.",
+    );
+
     return true;
   }
-
-  if (searchPools.searchMode === "relaxed") {
-    await ctx.reply(
-      "ℹ️ Точний збіг був слабкий, тому я розширив пошук і підібрав найближчі варіанти за нотами та характером.",
-    );
-  } else if (searchPools.searchMode === "broad") {
-    await ctx.reply(
-      "ℹ️ Точних збігів у вузькому пошуку не було, тому я показую найближчі варіанти з ширшого підбору.",
-    );
-  }
-
-  await updateProgressMessage(
-    ctx,
-    progressMsg,
-    "🔎 Пошук запущено...\n\n1/5 Запит розібрано\n2/5 Профіль побудовано\n3/5 Кандидати знайдені\n4/5 Відбір завершено\n5/5 Надсилаю результати",
-  );
-
-  await ctx.reply(`✨ Підібрав ${Math.min(3, firstBatch.length)} найбільш схожі варіанти:`);
-
-  const { sent, failed } = await sendItemsBatch(ctx, firstBatch);
-  const sentIds = sent.map((x) => x.id);
-  const offset = sentIds.length;
-
-  if (failed.length) {
-    console.error(
-      "First batch failed items:",
-      failed.map((x) => ({ id: x.id, name: x.name })),
-    );
-  }
-
-  setLastSearch(ctx, {
-    originalText: text,
-    analysis,
-    searchProfile: effectiveSearchProfile,
-    requestedGender,
-    primaryItems,
-    fallbackItems,
-    allItems,
-    offset,
-    sentIds,
-    usedFallback,
-  });
-
-  const totalMs = Date.now() - startedAt;
-
-  await updateProgressMessage(
-    ctx,
-    progressMsg,
-    `✅ Пошук завершено за ${formatMs(totalMs)}`,
-  );
-
-  const left = allItems.length - offset;
-
-  if (left > 0) {
-    await ctx.reply(`➡️ Є ще ${left} варіантів. Напишіть: "ще" або "дай ще 3"`);
-  }
-
-  return true;
 }
 
 module.exports = {

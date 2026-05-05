@@ -47,15 +47,19 @@ function getGenderBucket(requestedGender, itemGender) {
   const req = normalizeGenderValue(requestedGender);
   const item = normalizeGenderValue(itemGender);
 
+  // ВАЖЛИВО:
+  // Якщо користувач просить female або male,
+  // ми все одно дозволяємо female+unisex / male+unisex.
+  // Але якщо схожість однакова — unisex показуємо вище.
   if (req === "female") {
-    if (item === "female") return 0;
-    if (item === "unisex") return 1;
+    if (item === "unisex") return 0;
+    if (item === "female") return 1;
     return 2;
   }
 
   if (req === "male") {
-    if (item === "male") return 0;
-    if (item === "unisex") return 1;
+    if (item === "unisex") return 0;
+    if (item === "male") return 1;
     return 2;
   }
 
