@@ -101,9 +101,45 @@ function applyCommonAliases(value) {
     ["аромат", "perfume"],
     ["фрагранс", "fragrance"],
     ["фрагранс", "fragrance"],
+        // Good Girl / дослівні переклади / трансліт
+    ["good girl", "good girl"],
+    ["гуд герл", "good girl"],
+    ["гуд гьорл", "good girl"],
+    ["гуд гірл", "good girl"],
+    ["гуд гарл", "good girl"],
+    ["гуд гел", "good girl"],
+
+    ["гарна дівчинка", "good girl"],
+    ["красива дівчинка", "good girl"],
+    ["хороша дівчинка", "good girl"],
+    ["добра дівчинка", "good girl"],
+
+    ["гарна девочка", "good girl"],
+    ["красивая девочка", "good girl"],
+    ["хорошая девочка", "good girl"],
+    ["добрая девочка", "good girl"],
+
+    // Very Good Girl
+    ["very good girl", "very good girl"],
+    ["вері гуд герл", "very good girl"],
+    ["вери гуд герл", "very good girl"],
+    ["дуже гарна дівчинка", "very good girl"],
+    ["дуже хороша дівчинка", "very good girl"],
+    ["очень хорошая девочка", "very good girl"],
+
+    // Good Girl Gone Bad
+    ["good girl gone bad", "good girl gone bad"],
+    ["гуд герл гон бед", "good girl gone bad"],
+    ["гуд гьорл гон бед", "good girl gone bad"],
+    ["гуд гірл гон бед", "good girl gone bad"],
+    ["погана дівчинка", "good girl gone bad"],
+    ["плохая девочка", "good girl gone bad"],
+    ["гарна дівчинка стала поганою", "good girl gone bad"],
+    ["хороша дівчинка стала поганою", "good girl gone bad"],
+    ["хорошая девочка стала плохой", "good girl gone bad"],
   ];
 
-  for (const [from, to] of aliases) {
+  for (const [from, to] of aliases.sort((a, b) => norm(b[0]).length - norm(a[0]).length)) {
     const re = new RegExp(`\\b${escapeRegExp(norm(from))}\\b`, "gi");
     s = s.replace(re, norm(to));
   }
