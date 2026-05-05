@@ -86,10 +86,13 @@ function mapRow(row) {
     accords: row.keywords || "",
     keywords: row.keywords || "",
 
+    // ВАЖЛИВО:
+    // У твоїй БД version — це поле з alias-назвами / перекладами / альтернативними назвами.
+    // Тому воно має високий пріоритет у direct-пошуку.
     version: row.version || "",
+
     description: row.description || "",
     short_desc: row.description || "",
-
     quote: row.quote || "",
 
     sql_score: row.sql_score ?? null,
@@ -269,7 +272,7 @@ function buildFtsMatchQuery(input) {
       .flatMap((x) => normalizeSearchText(x).split(/\s+/))
       .map((x) => escapeFtsToken(x))
       .filter((x) => x.length >= 2),
-  ).slice(0, 12);
+  ).slice(0, 16);
 
   if (!terms.length) return "";
 
@@ -283,7 +286,7 @@ function buildLikeTerms(input) {
     rawTerms
       .flatMap((x) => normalizeSearchText(x).split(/\s+/))
       .filter((x) => x.length >= 2),
-  ).slice(0, 8);
+  ).slice(0, 10);
 }
 
 function findWeightedLikeCandidates(query, limit = 120) {
@@ -299,36 +302,45 @@ function findWeightedLikeCandidates(query, limit = 120) {
 
     whereParts.push(`
       lower(coalesce(name, '')) LIKE @${key}
+      OR lower(coalesce(version, '')) LIKE @${key}
+      OR lower(coalesce(keywords, '')) LIKE @${key}
+      OR lower(coalesce(notes, '')) LIKE @${key}
       OR lower(coalesce(number_code, '')) LIKE @${key}
       OR lower(coalesce(number_codes, '')) LIKE @${key}
       OR lower(coalesce(type, '')) LIKE @${key}
       OR lower(coalesce(for_whom, '')) LIKE @${key}
-      OR lower(coalesce(notes, '')) LIKE @${key}
-      OR lower(coalesce(keywords, '')) LIKE @${key}
       OR lower(coalesce(description, '')) LIKE @${key}
-      OR lower(coalesce(version, '')) LIKE @${key}
       OR lower(coalesce(season, '')) LIKE @${key}
       OR lower(coalesce(occasion, '')) LIKE @${key}
     `);
   });
 
+  const nameCond = terms.map((_, i) => `lower(coalesce(name, '')) LIKE @q${i}`).join(" OR ");
+  const versionCond = terms.map((_, i) => `lower(coalesce(version, '')) LIKE @q${i}`).join(" OR ");
+  const keywordCond = terms.map((_, i) => `lower(coalesce(keywords, '')) LIKE @q${i}`).join(" OR ");
+  const notesCond = terms.map((_, i) => `lower(coalesce(notes, '')) LIKE @q${i}`).join(" OR ");
+  const descriptionCond = terms.map((_, i) => `lower(coalesce(description, '')) LIKE @q${i}`).join(" OR ");
+  const typeCond = terms.map((_, i) => `lower(coalesce(type, '')) LIKE @q${i}`).join(" OR ");
+
   const sql = `
     SELECT
       ${PERFUME_SELECT_COLUMNS},
       CASE
-        WHEN ${terms.map((_, i) => `lower(coalesce(name, '')) LIKE @q${i}`).join(" OR ")} THEN 10000
-        WHEN ${terms.map((_, i) => `lower(coalesce(keywords, '')) LIKE @q${i}`).join(" OR ")} THEN 8500
-        WHEN ${terms.map((_, i) => `lower(coalesce(notes, '')) LIKE @q${i}`).join(" OR ")} THEN 8000
-        WHEN ${terms.map((_, i) => `lower(coalesce(version, '')) LIKE @q${i}`).join(" OR ")} THEN 6500
-        WHEN ${terms.map((_, i) => `lower(coalesce(description, '')) LIKE @q${i}`).join(" OR ")} THEN 5000
-        ELSE 3000
+        WHEN ${nameCond} THEN 12000
+        WHEN ${versionCond} THEN 11500
+        WHEN ${keywordCond} THEN 8500
+        WHEN ${notesCond} THEN 8000
+        WHEN ${descriptionCond} THEN 4500
+        WHEN ${typeCond} THEN 3500
+        ELSE 2500
       END AS sql_score,
       CASE
-        WHEN ${terms.map((_, i) => `lower(coalesce(name, '')) LIKE @q${i}`).join(" OR ")} THEN 'name'
-        WHEN ${terms.map((_, i) => `lower(coalesce(keywords, '')) LIKE @q${i}`).join(" OR ")} THEN 'keywords'
-        WHEN ${terms.map((_, i) => `lower(coalesce(notes, '')) LIKE @q${i}`).join(" OR ")} THEN 'notes'
-        WHEN ${terms.map((_, i) => `lower(coalesce(version, '')) LIKE @q${i}`).join(" OR ")} THEN 'version'
-        WHEN ${terms.map((_, i) => `lower(coalesce(description, '')) LIKE @q${i}`).join(" OR ")} THEN 'description'
+        WHEN ${nameCond} THEN 'name'
+        WHEN ${versionCond} THEN 'version'
+        WHEN ${keywordCond} THEN 'keywords'
+        WHEN ${notesCond} THEN 'notes'
+        WHEN ${descriptionCond} THEN 'description'
+        WHEN ${typeCond} THEN 'type'
         ELSE 'text'
       END AS sql_field
     FROM perfumes
@@ -365,17 +377,17 @@ function findWeightedFtsCandidates(query, limit = 120) {
           p.quote,
           CAST(10000 - (bm25(
             perfumes_fts,
-            9.0,
-            6.0,
-            5.0,
-            4.0,
-            2.0,
-            8.0,
-            8.0,
-            3.0,
-            6.0,
-            2.0,
-            2.0
+            10.0, -- name
+            5.0,  -- number_code
+            4.0,  -- number_codes
+            3.0,  -- type
+            2.0,  -- for_whom
+            7.0,  -- notes
+            8.0,  -- keywords
+            3.0,  -- description
+            9.5,  -- version: alias-назви / переклади
+            2.0,  -- season
+            2.0   -- occasion
           ) * 1000) AS INTEGER) AS sql_score,
           'fts' AS sql_field
         FROM perfumes_fts
@@ -383,15 +395,15 @@ function findWeightedFtsCandidates(query, limit = 120) {
         WHERE perfumes_fts MATCH @match
         ORDER BY bm25(
           perfumes_fts,
-          9.0,
-          6.0,
+          10.0,
           5.0,
           4.0,
+          3.0,
           2.0,
-          8.0,
+          7.0,
           8.0,
           3.0,
-          6.0,
+          9.5,
           2.0,
           2.0
         ) ASC
@@ -605,6 +617,7 @@ function rebuildPerfumesFts() {
 
     CREATE INDEX IF NOT EXISTS idx_perfumes_number_code ON perfumes(number_code);
     CREATE INDEX IF NOT EXISTS idx_perfumes_name ON perfumes(name);
+    CREATE INDEX IF NOT EXISTS idx_perfumes_version ON perfumes(version);
     CREATE INDEX IF NOT EXISTS idx_perfumes_for_whom ON perfumes(for_whom);
     CREATE INDEX IF NOT EXISTS idx_perfumes_type ON perfumes(type);
 

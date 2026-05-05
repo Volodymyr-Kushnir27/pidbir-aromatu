@@ -177,6 +177,7 @@ END;
 
 CREATE INDEX IF NOT EXISTS idx_perfumes_number_code ON perfumes(number_code);
 CREATE INDEX IF NOT EXISTS idx_perfumes_name ON perfumes(name);
+CREATE INDEX IF NOT EXISTS idx_perfumes_version ON perfumes(version);
 CREATE INDEX IF NOT EXISTS idx_perfumes_for_whom ON perfumes(for_whom);
 CREATE INDEX IF NOT EXISTS idx_perfumes_type ON perfumes(type);
 

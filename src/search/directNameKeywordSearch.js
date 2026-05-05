@@ -1,17 +1,17 @@
 const { findWeightedTextCandidates } = require("./catalogRepo");
 
 /**
- * Direct search по назві / keywords / version / description / notes.
+ * Direct search по БД.
  *
- * Швидка версія:
- * 1. SQLite FTS/LIKE відбирає 50-120 кандидатів.
- * 2. JS fuzzy/scoring працює тільки по цих кандидатах.
- * 3. Не перебираємо всю БД у Node.js.
+ * Пріоритет:
+ * 1. name
+ * 2. version  ← у твоїй БД це alias-назви / переклади / альтернативні назви
+ * 3. keywords
+ * 4. notes
+ * 5. description
  *
- * Важливо:
- * - "лакоста" шукає: лакоста / лакост / лакосте / lacoste / lacost / lakosta / lakost
- * - "габа" шукає: габа / GABA / Hormone Paris
- * - "габа" НЕ має тягнути Dolce Gabbana через weak compact match.
+ * Якщо нічого сильного не знайдено — perfumeChatFlow має йти в AI,
+ * AI формує search_terms, і потім ці terms знову шукаються тут.
  */
 
 function escapeRegExp(value) {
@@ -155,6 +155,17 @@ function getAliases() {
     ["гуд гарл", "good girl"],
     ["гуд гел", "good girl"],
 
+    // Black Opium
+    ["чорний опіум", "black opium"],
+    ["черный опиум", "black opium"],
+    ["блек опіум", "black opium"],
+    ["блек опиум", "black opium"],
+
+    // La Vie Est Belle
+    ["ла ві е бель", "la vie est belle"],
+    ["лаві е бель", "la vie est belle"],
+    ["ля ви э бель", "la vie est belle"],
+
     // Common perfume terms
     ["парфюм", "perfume"],
     ["парфум", "perfume"],
@@ -176,7 +187,7 @@ function applyCommonAliases(value) {
     const source = norm(from);
     if (!source) continue;
 
-    // Без \b, бо \b погано працює з кирилицею у JS.
+    // Не використовуємо \b, бо \b погано працює з кирилицею.
     const re = new RegExp(`(^|\\s)${escapeRegExp(source)}(?=\\s|$)`, "gi");
     s = s.replace(re, `$1${norm(to)}`);
   }
@@ -281,8 +292,6 @@ function levenshtein(a, b) {
 function fuzzyDistanceLimit(token) {
   const len = String(token || "").length;
 
-  // Короткі слова не fuzzy-матчимо:
-  // "габа" не має ставати "gabbana".
   if (len <= 4) return 0;
   if (len <= 7) return 1;
   if (len <= 10) return 2;
@@ -434,7 +443,7 @@ function scoreField(fieldValue, query, fieldWeight) {
   const cq = compactRepeated(q);
   const cf = compactRepeated(field);
 
-  // Критично: "gaba" НЕ має матчити "gabbana".
+  // "gaba" НЕ має матчити "gabbana".
   if (q === "gaba") {
     return {
       score: 0,
@@ -443,7 +452,6 @@ function scoreField(fieldValue, query, fieldWeight) {
     };
   }
 
-  // weak compact тільки для 5+ символів.
   if (q.length >= 5 && cf.includes(cq)) {
     return {
       score: 1400 + fieldWeight,
@@ -464,7 +472,12 @@ function scorePerfume(item, query) {
     {
       label: "назва",
       value: item.name,
-      weight: 700,
+      weight: 1000,
+    },
+    {
+      label: "версія",
+      value: item.version,
+      weight: 950,
     },
     {
       label: "ключові слова",
@@ -472,19 +485,9 @@ function scorePerfume(item, query) {
       weight: 650,
     },
     {
-      label: "версія",
-      value: item.version,
-      weight: 500,
-    },
-    {
-      label: "код",
-      value: item.number_code,
-      weight: 450,
-    },
-    {
-      label: "коди",
-      value: item.number_codes,
-      weight: 400,
+      label: "ноти",
+      value: item.notes,
+      weight: 550,
     },
     {
       label: "опис",
@@ -492,9 +495,14 @@ function scorePerfume(item, query) {
       weight: 250,
     },
     {
-      label: "ноти",
-      value: item.notes,
-      weight: 220,
+      label: "код",
+      value: item.number_code,
+      weight: 150,
+    },
+    {
+      label: "коди",
+      value: item.number_codes,
+      weight: 120,
     },
   ];
 
@@ -553,7 +561,7 @@ function buildPrefilterTerms(query) {
   const compactAliased = aliased.replace(/\s+/g, "");
 
   // Lacoste:
-  // Якщо користувач пише "лакоста", треба шукати і кирилицю, і латиницю.
+  // шукаємо у version/name/keywords усі основні форми.
   if (
     compactRaw.includes("лакост") ||
     compactRaw.includes("лакоста") ||
@@ -579,7 +587,6 @@ function buildPrefilterTerms(query) {
   }
 
   // GABA / Hormone Paris:
-  // Не плутати з Gabbana.
   if (
     compactRaw.includes("габа") ||
     compactAliased.includes("gaba") ||
@@ -599,7 +606,7 @@ function buildPrefilterTerms(query) {
     );
   }
 
-  // Good Girl.
+  // Good Girl / Bad Girl translations.
   if (
     compactRaw.includes("дівчин") ||
     compactRaw.includes("девоч") ||
@@ -608,6 +615,8 @@ function buildPrefilterTerms(query) {
   ) {
     extra.push(
       "good girl",
+      "very good girl",
+      "good girl gone bad",
       "good",
       "girl",
       "гуд",
@@ -616,6 +625,10 @@ function buildPrefilterTerms(query) {
       "гьорл",
       "дівчинка",
       "девочка",
+      "погана дівчинка",
+      "плохая девочка",
+      "гарна дівчинка",
+      "хорошая девочка",
     );
   }
 
@@ -632,7 +645,7 @@ function buildPrefilterTerms(query) {
     ...rawTokens,
     ...aliasedTokens,
     ...stems,
-  ]).slice(0, 24);
+  ]).slice(0, 30);
 }
 
 function searchByNameAndKeywords(query, options = {}) {
@@ -653,6 +666,24 @@ function searchByNameAndKeywords(query, options = {}) {
     .sort((a, b) => {
       const diff = Number(b.match_score || 0) - Number(a.match_score || 0);
       if (diff !== 0) return diff;
+
+      const fieldPriority = {
+        "назва": 1,
+        version: 2,
+        "версія": 2,
+        keywords: 3,
+        "ключові слова": 3,
+        notes: 4,
+        "ноти": 4,
+        description: 5,
+        "опис": 5,
+        fts: 6,
+      };
+
+      const af = fieldPriority[String(a.direct_match_field || "")] || 99;
+      const bf = fieldPriority[String(b.direct_match_field || "")] || 99;
+
+      if (af !== bf) return af - bf;
 
       const aType = String(a.direct_match_type || "");
       const bType = String(b.direct_match_type || "");
@@ -705,11 +736,13 @@ function hasStrongDirectMatch(items = []) {
     return score >= 7000;
   }
 
-  // FTS/SQL по name/keywords/notes також може бути сильним direct-збігом.
+  // Важливо:
+  // Якщо швидкий SQL/FTS знайшов по name/version/keywords/notes,
+  // це direct-збіг і AI не потрібен.
   if (
     type === "sql_prefilter" &&
     score >= 8000 &&
-    ["keywords", "name", "notes", "fts"].includes(field)
+    ["name", "version", "keywords", "notes", "fts"].includes(field)
   ) {
     return true;
   }
