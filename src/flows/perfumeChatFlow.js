@@ -6,13 +6,9 @@ const { writeReferencePerfumeIntro } = require("../llm/writeReferencePerfumeIntr
 const { buildSearchProfile } = require("../llm/perfumeSearchProfile");
 const { attachReasons } = require("../llm/resultExplainer");
 const { rerankAndExplain } = require("../llm/rerankExplainer");
-
+const { searchByNameAndKeywords,hasStrongDirectMatch,} = require("../search/directNameKeywordSearch");
 const { findCandidates } = require("../search/candidateSearch");
-const {
-  rerankTopK,
-  normalizeGenderValue,
-} = require("../search/candidateRerank");
-
+const {rerankTopK, normalizeGenderValue,} = require("../search/candidateRerank");
 const {
   findByExactName,
   findByNumberCode,
@@ -21,11 +17,6 @@ const {
   normalizeCode,
   extractNumericCode,
 } = require("../search/catalogRepo");
-
-const {
-  searchByNameAndKeywords,
-  hasStrongDirectMatch,
-} = require("../search/directNameKeywordSearch");
 
 const { sendPerfumeCard } = require("./sendPerfumeCard");
 const adminsStore = require("../storage/adminsStore");
@@ -40,13 +31,6 @@ const CLOSE_SCORE_DELTA_FOR_UNISEX = Number(
 const MIN_STRICT_SCORE = Number(process.env.SEARCH_MIN_STRICT_SCORE || 8);
 const MIN_RELAXED_SCORE = Number(process.env.SEARCH_MIN_RELAXED_SCORE || 4);
 const APPROX_RANDOM_WINDOW = Number(process.env.APPROX_RANDOM_WINDOW || 30);
-
-const TELEGRAM_TIMEOUT_MS = Number(process.env.TELEGRAM_TIMEOUT_MS || 5000);
-const AI_ANALYZE_TIMEOUT_MS = Number(process.env.AI_ANALYZE_TIMEOUT_MS || 20000);
-const AI_PROFILE_TIMEOUT_MS = Number(process.env.AI_PROFILE_TIMEOUT_MS || 20000);
-const AI_RERANK_TIMEOUT_MS = Number(process.env.AI_RERANK_TIMEOUT_MS || 20000);
-const DB_SEARCH_TIMEOUT_MS = Number(process.env.DB_SEARCH_TIMEOUT_MS || 15000);
-const FINAL_RANK_TIMEOUT_MS = Number(process.env.FINAL_RANK_TIMEOUT_MS || 25000);
 
 /* =========================
    State helpers
@@ -187,41 +171,6 @@ function isPositiveScore(item, minScore = 1) {
   return normalizeScore(item) >= minScore;
 }
 
-function withStepTimeout(promise, ms, label) {
-  let timer;
-
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`${label} timeout after ${ms}ms`));
-    }, ms);
-  });
-
-  return Promise.race([promise, timeout]).finally(() => {
-    clearTimeout(timer);
-  });
-}
-
-function logStep(label, data = {}) {
-  console.log(`[PERFUME FLOW] ${label}`, {
-    ...data,
-    at: new Date().toISOString(),
-  });
-}
-
-async function safeTyping(ctx) {
-  try {
-    await withStepTimeout(
-      ctx.sendChatAction("typing"),
-      TELEGRAM_TIMEOUT_MS,
-      "telegram.sendChatAction",
-    );
-  } catch (e) {
-    console.error("[PERFUME FLOW] typing failed", {
-      error: e?.message || String(e),
-    });
-  }
-}
-
 function makeSeedFromText(text) {
   const s = norm(text);
   let hash = 2166136261;
@@ -357,6 +306,12 @@ function filterAllowedGender(items = [], requestedGender = null) {
   );
 }
 
+/**
+ * Головне правило:
+ * - спочатку схожість;
+ * - якщо score однаковий або дуже близький, unisex іде вище female/male;
+ * - якщо female/male явно точніший по нотах, він лишається вище.
+ */
 function sortBySimilarityWithUnisexPriority(
   items = [],
   requestedGender = null,
@@ -464,18 +419,14 @@ function buildApproximateNoExactReply(analysis, searchProfile) {
   );
 }
 
+function renderMetaComment() {
+  return "";
+}
+
 async function createProgressMessage(ctx, text) {
   try {
-    return await withStepTimeout(
-      ctx.reply(text),
-      TELEGRAM_TIMEOUT_MS,
-      "telegram.reply.progress",
-    );
-  } catch (e) {
-    console.error("[PERFUME FLOW] createProgressMessage failed", {
-      error: e?.message || String(e),
-    });
-
+    return await ctx.reply(text);
+  } catch {
     return null;
   }
 }
@@ -484,56 +435,27 @@ async function updateProgressMessage(ctx, progressMsg, text) {
   if (!progressMsg?.message_id || !ctx.chat?.id) return;
 
   try {
-    await withStepTimeout(
-      ctx.telegram.editMessageText(
-        ctx.chat.id,
-        progressMsg.message_id,
-        undefined,
-        text,
-      ),
-      TELEGRAM_TIMEOUT_MS,
-      "telegram.editMessageText",
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      progressMsg.message_id,
+      undefined,
+      text,
     );
-  } catch (e) {
-    console.error("[PERFUME FLOW] updateProgressMessage failed", {
-      error: e?.message || String(e),
-    });
-  }
-}
-
-async function safeReply(ctx, text) {
-  try {
-    return await withStepTimeout(
-      ctx.reply(text),
-      TELEGRAM_TIMEOUT_MS,
-      "telegram.reply",
-    );
-  } catch (e) {
-    console.error("[PERFUME FLOW] reply failed", {
-      error: e?.message || String(e),
-      text: String(text || "").slice(0, 300),
-    });
-
-    return null;
-  }
+  } catch {}
 }
 
 async function sendItemsBatch(ctx, items) {
   const sent = [];
   const failed = [];
 
-  for (const item of items || []) {
+  for (const item of items) {
     try {
       const payload = buildPayloadWithExplanations(item);
 
-      await withStepTimeout(
-        sendPerfumeCard(ctx, payload, {
-          notes: true,
-          season: false,
-        }),
-        Number(process.env.SEND_CARD_TIMEOUT_MS || 20000),
-        `sendPerfumeCard:${item?.id || "unknown"}`,
-      );
+      await sendPerfumeCard(ctx, payload, {
+        notes: true,
+        season: false,
+      });
 
       sent.push(item);
     } catch (e) {
@@ -565,6 +487,8 @@ function makeProfileWithGender(searchProfile, gender) {
 function makeComparableSimilarityProfile(searchProfile) {
   return {
     ...(searchProfile || {}),
+    // gender не дає бонус у score.
+    // Стать працює тільки як allowed-filter.
     gender: "unknown",
   };
 }
@@ -655,6 +579,32 @@ function extractUsefulTokens(text) {
       .filter((x) => x.length >= 3)
       .filter((x) => !stop.has(norm(x))),
   ).slice(0, 15);
+}
+
+
+function shouldUseDirectNameSearch(text) {
+  const t = norm(text);
+
+  if (!t) return false;
+
+  // Якщо це запит-опис, не запускаємо важкий direct search.
+  // Такі запити має розбирати AI.
+  const semanticPatterns = [
+    /\b(аромат|парфум|духи)\s+з\b/i,
+    /\b(з\s+нотою|з\s+нотами|нота|ноти|ноткою)\b/i,
+    /\b(підбери|підкажи|знайди|хочу|треба|потрібно)\b/i,
+    /\b(схожий|схожа|схоже|як|типу)\b/i,
+  ];
+
+  if (semanticPatterns.some((re) => re.test(t))) {
+    return false;
+  }
+
+  const usefulTokens = extractUsefulTokens(t);
+
+  // Direct search тільки для коротких назва/бренд-запитів.
+  // Наприклад: "Габа", "Лакоста", "Good Girl", "Light Blue".
+  return usefulTokens.length > 0 && usefulTokens.length <= 3;
 }
 
 function createRelaxedSearchProfile(searchProfile, analysis, userText) {
@@ -901,7 +851,7 @@ function buildReferenceFallbackIntro(analysis) {
 async function sendReferenceIntro(ctx, text, analysis) {
   if (analysis?.query_type !== "reference_perfume") {
     if (analysis?.user_friendly_reply) {
-      await safeReply(ctx, `✨ ${analysis.user_friendly_reply}`);
+      await ctx.reply(`✨ ${analysis.user_friendly_reply}`);
     }
     return;
   }
@@ -909,8 +859,7 @@ async function sendReferenceIntro(ctx, text, analysis) {
   if (!isSpecificReferencePerfume(analysis)) {
     const genericName = analysis?.brand || analysis?.target_name || "цей аромат";
 
-    await safeReply(
-      ctx,
+    await ctx.reply(
       `🧴 Бачу орієнтир на ${genericName}, але без точної моделі аромат визначено занадто загально. Тому не буду вигадувати точні ноти — підберу найближчі варіанти з бази за стилем, асоціаціями та ключовими словами запиту.`,
     );
 
@@ -918,17 +867,13 @@ async function sendReferenceIntro(ctx, text, analysis) {
   }
 
   try {
-    const introText = await withStepTimeout(
-      writeReferencePerfumeIntro({
-        userText: text,
-        analysis,
-      }),
-      Number(process.env.AI_REFERENCE_INTRO_TIMEOUT_MS || 15000),
-      "writeReferencePerfumeIntro",
-    );
+    const introText = await writeReferencePerfumeIntro({
+      userText: text,
+      analysis,
+    });
 
     if (introText) {
-      await safeReply(ctx, introText);
+      await ctx.reply(introText);
       return;
     }
   } catch (e) {
@@ -938,9 +883,9 @@ async function sendReferenceIntro(ctx, text, analysis) {
   const fallback = buildReferenceFallbackIntro(analysis);
 
   if (fallback) {
-    await safeReply(ctx, fallback);
+    await ctx.reply(fallback);
   } else if (analysis?.user_friendly_reply) {
-    await safeReply(ctx, `✨ ${analysis.user_friendly_reply}`);
+    await ctx.reply(`✨ ${analysis.user_friendly_reply}`);
   }
 }
 
@@ -981,6 +926,7 @@ async function enrichAndRankItems({
     allItems,
     {
       ...(searchProfile || {}),
+      // Для чесного rerank стать не має давати бонус.
       gender: "unknown",
     },
     analysis?.target_name,
@@ -993,33 +939,16 @@ async function enrichAndRankItems({
     allItems = randomizeApproximatePool(allItems, text, 18);
   }
 
+  // Для approximate fallback не даємо GPT повністю переставляти список,
+  // щоб не повертатися до одного й того самого першого аромату.
   if (!approximate) {
     try {
-      logStep("before rerankAndExplain", {
-        text,
-        candidates: allItems.slice(0, 6).map((x) => ({
-          id: x.id,
-          name: x.name,
-          score: x.match_score,
-          gender: x.gender,
-        })),
-      });
-
-      const gptSelected = await withStepTimeout(
-        rerankAndExplain({
-          userText: text,
-          analysis,
-          searchProfile,
-          candidates: allItems.slice(0, 6),
-          topK: Math.min(6, allItems.length),
-        }),
-        AI_RERANK_TIMEOUT_MS,
-        "rerankAndExplain",
-      );
-
-      logStep("after rerankAndExplain", {
-        text,
-        selected: Array.isArray(gptSelected) ? gptSelected.length : 0,
+      const gptSelected = await rerankAndExplain({
+        userText: text,
+        analysis,
+        searchProfile,
+        candidates: allItems.slice(0, 6),
+        topK: Math.min(6, allItems.length),
       });
 
       if (Array.isArray(gptSelected) && gptSelected.length) {
@@ -1093,8 +1022,7 @@ function parseBatchSize(text, fallback = 3) {
 
 async function sendNextBatchFromState(ctx, saved, text = "") {
   if (!saved) {
-    await safeReply(
-      ctx,
+    await ctx.reply(
       "ℹ️ Немає збереженого попереднього пошуку. Напишіть новий запит.",
     );
     return true;
@@ -1116,7 +1044,7 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
     : uniqById(fallbackItems);
 
   if (!orderedItems.length) {
-    await safeReply(ctx, "ℹ️ Немає збережених результатів. Напишіть новий запит.");
+    await ctx.reply("ℹ️ Немає збережених результатів. Напишіть новий запит.");
     clearLastSearch(ctx);
     return true;
   }
@@ -1140,7 +1068,7 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
   }
 
   if (!remaining.length) {
-    await safeReply(ctx, "✅ Це були всі варіанти за попереднім запитом.");
+    await ctx.reply("✅ Це були всі варіанти за попереднім запитом.");
     clearLastSearch(ctx);
     return true;
   }
@@ -1148,8 +1076,7 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
   const safeRemaining = remaining.filter((x) => !sentIds.includes(x.id));
   const batch = safeRemaining.slice(0, batchSize);
 
-  await safeReply(
-    ctx,
+  await ctx.reply(
     `🔎 Показую ${Math.min(batchSize, safeRemaining.length)} ${sourceLabel}:`,
   );
 
@@ -1172,16 +1099,16 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
   const left = orderedItems.length - nextSentIds.length;
 
   if (left > 0) {
-    await safeReply(ctx, `➡️ Ще залишилось ${left} варіантів. Напишіть: "ще"`);
+    await ctx.reply(`➡️ Ще залишилось ${left} варіантів. Напишіть: "ще"`);
   } else {
-    await safeReply(ctx, "✅ Це були всі варіанти за цим запитом.");
+    await ctx.reply("✅ Це були всі варіанти за цим запитом.");
   }
 
   return true;
 }
 
 /* =========================
-   Code search
+   Main text handler
 ========================= */
 
 async function sendCodeMatches(ctx, text) {
@@ -1192,7 +1119,7 @@ async function sendCodeMatches(ctx, text) {
 
   if (byExactCode) {
     clearLastSearch(ctx);
-    await safeReply(ctx, `✅ Знайшов аромат за кодом ${code}:`);
+    await ctx.reply(`✅ Знайшов аромат за кодом ${code}:`);
     await sendPerfumeCard(ctx, byExactCode, { notes: true, season: true });
     return true;
   }
@@ -1203,8 +1130,7 @@ async function sendCodeMatches(ctx, text) {
   if (numericMatches.length) {
     clearLastSearch(ctx);
 
-    await safeReply(
-      ctx,
+    await ctx.reply(
       `✅ Знайшов ${numericMatches.length} варіанти за номером ${numericCode}:`,
     );
 
@@ -1221,8 +1147,7 @@ async function sendCodeMatches(ctx, text) {
         approximate: false,
       });
 
-      await safeReply(
-        ctx,
+      await ctx.reply(
         `➡️ Є ще ${numericMatches.length - batch.length} варіантів. Напишіть: "ще"`,
       );
     }
@@ -1230,17 +1155,8 @@ async function sendCodeMatches(ctx, text) {
     return true;
   }
 
-  await safeReply(
-    ctx,
-    `❌ Не знайшов аромат з кодом ${code}.\n\nСпробуйте:\n• інший код\n• назву аромату\n• ноти\n• або стиль`,
-  );
-
-  return true;
+  return false;
 }
-
-/* =========================
-   Main text handler
-========================= */
 
 async function onUserText(ctx) {
   const mode = getMode(ctx);
@@ -1270,13 +1186,16 @@ async function onUserText(ctx) {
     ].join("\n"),
   );
 
+  let analysis = null;
+  let searchProfile = null;
+  let searchResult = null;
+  let allItems = [];
+
   try {
-    logStep("search started", {
+    console.log("[PERFUME FLOW] search started", {
       text,
       userId: ctx.from?.id,
     });
-
-    await safeTyping(ctx);
 
     await updateProgressMessage(
       ctx,
@@ -1290,18 +1209,14 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    logStep("before code search", {
+    console.log("[PERFUME FLOW] before code search", {
       text,
       ms: Date.now() - startedAt,
     });
 
-    const handledCode = await withStepTimeout(
-      sendCodeMatches(ctx, text),
-      Number(process.env.CODE_SEARCH_TIMEOUT_MS || 10000),
-      "sendCodeMatches",
-    );
+    const handledCode = await sendCodeMatches(ctx, text);
 
-    logStep("after code search", {
+    console.log("[PERFUME FLOW] after code search", {
       text,
       ms: Date.now() - startedAt,
       handledCode,
@@ -1329,29 +1244,48 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    logStep("before directNameKeywordSearch", {
+    let directMatches = [];
+    const useDirectSearch = shouldUseDirectNameSearch(text);
+
+    console.log("[PERFUME FLOW] direct search decision", {
       text,
       ms: Date.now() - startedAt,
+      useDirectSearch,
+      usefulTokens: extractUsefulTokens(text),
     });
 
-    const directMatches = searchByNameAndKeywords(text, {
-      limit: SEARCH.LIMIT_CANDIDATES || 100,
-      minScore: 1200,
-    });
+    if (useDirectSearch) {
+      console.log("[PERFUME FLOW] before directNameKeywordSearch", {
+        text,
+        ms: Date.now() - startedAt,
+      });
 
-    logStep("after directNameKeywordSearch", {
-      text,
-      ms: Date.now() - startedAt,
-      count: directMatches.length,
-      strong: hasStrongDirectMatch(directMatches),
-      first: directMatches.slice(0, 5).map((x) => ({
-        id: x.id,
-        name: x.name,
-        score: x.match_score,
-        type: x.direct_match_type,
-        field: x.direct_match_field,
-      })),
-    });
+      directMatches = searchByNameAndKeywords(text, {
+        limit: SEARCH.LIMIT_CANDIDATES || 100,
+        minScore: 1200,
+        scanLimit: 1200,
+      });
+
+      console.log("[PERFUME FLOW] after directNameKeywordSearch", {
+        text,
+        ms: Date.now() - startedAt,
+        count: directMatches.length,
+        strong: hasStrongDirectMatch(directMatches),
+        first: directMatches.slice(0, 5).map((x) => ({
+          id: x.id,
+          name: x.name,
+          score: x.match_score,
+          type: x.direct_match_type,
+          field: x.direct_match_field,
+        })),
+      });
+    } else {
+      console.log("[PERFUME FLOW] directNameKeywordSearch skipped", {
+        text,
+        ms: Date.now() - startedAt,
+        reason: "semantic_or_long_query",
+      });
+    }
 
     if (hasStrongDirectMatch(directMatches)) {
       clearLastSearch(ctx);
@@ -1369,8 +1303,7 @@ async function onUserText(ctx) {
         ].join("\n"),
       );
 
-      await safeReply(
-        ctx,
+      await ctx.reply(
         `✅ Знайшов ${directMatches.length} варіанти за назвою / ключовими словами.\n\nСпочатку показую 100% збіги, далі — менш точні.`,
       );
 
@@ -1402,12 +1335,12 @@ async function onUserText(ctx) {
       const left = directMatches.length - sentIds.length;
 
       if (left > 0) {
-        await safeReply(ctx, `➡️ Є ще ${left} варіантів. Напишіть: "ще" або "дай ще 3"`);
+        await ctx.reply(`➡️ Є ще ${left} варіантів. Напишіть: "ще" або "дай ще 3"`);
       } else {
-        await safeReply(ctx, "✅ Це всі знайдені варіанти за цим запитом.");
+        await ctx.reply("✅ Це всі знайдені варіанти за цим запитом.");
       }
 
-      logStep("completed by direct search", {
+      console.log("[PERFUME FLOW] completed by direct search", {
         text,
         ms: Date.now() - startedAt,
         total: directMatches.length,
@@ -1428,14 +1361,14 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    logStep("before exact name search", {
+    console.log("[PERFUME FLOW] before exact name search", {
       text,
       ms: Date.now() - startedAt,
     });
 
     const exactByName = findByExactName(text);
 
-    logStep("after exact name search", {
+    console.log("[PERFUME FLOW] after exact name search", {
       text,
       ms: Date.now() - startedAt,
       found: Boolean(exactByName),
@@ -1452,7 +1385,7 @@ async function onUserText(ctx) {
         `✅ Пошук завершено за ${formatMs(Date.now() - startedAt)}\n\nЗнайшов точний збіг за назвою.`,
       );
 
-      await safeReply(ctx, `✅ Знайшов точний збіг за назвою ${exactByName.name}:`);
+      await ctx.reply(`✅ Знайшов точний збіг за назвою ${exactByName.name}:`);
       await sendPerfumeCard(ctx, exactByName, { notes: true, season: true });
 
       return true;
@@ -1471,18 +1404,14 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    logStep("before analyzePerfumeIntent", {
+    console.log("[PERFUME FLOW] before analyzePerfumeIntent", {
       text,
       ms: Date.now() - startedAt,
     });
 
-    const analysis = await withStepTimeout(
-      analyzePerfumeIntent(text),
-      AI_ANALYZE_TIMEOUT_MS,
-      "analyzePerfumeIntent",
-    );
+    analysis = await analyzePerfumeIntent(text);
 
-    logStep("after analyzePerfumeIntent", {
+    console.log("[PERFUME FLOW] after analyzePerfumeIntent", {
       text,
       ms: Date.now() - startedAt,
       query_type: analysis?.query_type,
@@ -1496,23 +1425,6 @@ async function onUserText(ctx) {
       accords: analysis?.accords,
       style: analysis?.style,
     });
-
-    if (!analysis) {
-      clearLastSearch(ctx);
-
-      await updateProgressMessage(
-        ctx,
-        progressMsg,
-        `⚠️ Аналіз запиту не дав відповіді за ${formatMs(Date.now() - startedAt)}`,
-      );
-
-      await safeReply(
-        ctx,
-        "⚠️ Не вдалося проаналізувати запит. Спробуйте коротше: назва, код, нота або стиль.",
-      );
-
-      return true;
-    }
 
     await updateProgressMessage(
       ctx,
@@ -1528,18 +1440,14 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    logStep("before buildSearchProfile", {
+    console.log("[PERFUME FLOW] before buildSearchProfile", {
       text,
       ms: Date.now() - startedAt,
     });
 
-    const searchProfile = await withStepTimeout(
-      buildSearchProfile(analysis),
-      AI_PROFILE_TIMEOUT_MS,
-      "buildSearchProfile",
-    );
+    searchProfile = await buildSearchProfile(analysis);
 
-    logStep("after buildSearchProfile", {
+    console.log("[PERFUME FLOW] after buildSearchProfile", {
       text,
       ms: Date.now() - startedAt,
       gender: searchProfile?.gender,
@@ -1549,23 +1457,6 @@ async function onUserText(ctx) {
       accords: searchProfile?.accords,
       style_tags: searchProfile?.style_tags,
     });
-
-    if (!searchProfile) {
-      clearLastSearch(ctx);
-
-      await updateProgressMessage(
-        ctx,
-        progressMsg,
-        `⚠️ Профіль пошуку не створено за ${formatMs(Date.now() - startedAt)}`,
-      );
-
-      await safeReply(
-        ctx,
-        "⚠️ Не вдалося побудувати профіль пошуку. Спробуйте уточнити ноти або назву.",
-      );
-
-      return true;
-    }
 
     await updateProgressMessage(
       ctx,
@@ -1582,24 +1473,20 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    logStep("before runSearchWithFallbackProfiles", {
+    console.log("[PERFUME FLOW] before runSearchWithFallbackProfiles", {
       text,
       ms: Date.now() - startedAt,
     });
 
-    const searchResult = await withStepTimeout(
-      runSearchWithFallbackProfiles({
-        text,
-        analysis,
-        searchProfile,
-      }),
-      DB_SEARCH_TIMEOUT_MS,
-      "runSearchWithFallbackProfiles",
-    );
+    searchResult = await runSearchWithFallbackProfiles({
+      text,
+      analysis,
+      searchProfile,
+    });
 
     const activeProfile = searchResult.searchProfileUsed || searchProfile;
 
-    logStep("after runSearchWithFallbackProfiles", {
+    console.log("[PERFUME FLOW] after runSearchWithFallbackProfiles", {
       text,
       ms: Date.now() - startedAt,
       searchMode: searchResult?.searchMode,
@@ -1625,8 +1512,7 @@ async function onUserText(ctx) {
         `✅ AI-підбір завершено за ${formatMs(Date.now() - startedAt)}`,
       );
 
-      await safeReply(
-        ctx,
+      await ctx.reply(
         "😔 Вдалих збігів не знайдено.\n\nЯ перевірив код, назву, ключові слова, ноти, опис і стиль аромату, але в базі немає навіть приблизно релевантного напряму.",
       );
 
@@ -1634,13 +1520,13 @@ async function onUserText(ctx) {
     }
 
     if (searchResult.approximate) {
-      await safeReply(ctx, buildApproximateNoExactReply(analysis, activeProfile));
+      await ctx.reply(buildApproximateNoExactReply(analysis, activeProfile));
     }
 
     if (analysis?.query_type === "reference_perfume") {
       await sendReferenceIntro(ctx, text, analysis);
     } else if (!searchResult.approximate && analysis?.user_friendly_reply) {
-      await safeReply(ctx, `✨ ${analysis.user_friendly_reply}`);
+      await ctx.reply(`✨ ${analysis.user_friendly_reply}`);
     }
 
     await updateProgressMessage(
@@ -1659,26 +1545,22 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    logStep("before enrichAndRankItems", {
+    console.log("[PERFUME FLOW] before enrichAndRankItems", {
       text,
       ms: Date.now() - startedAt,
       count: searchResult?.allItems?.length || 0,
     });
 
-    const allItems = await withStepTimeout(
-      enrichAndRankItems({
-        items: searchResult.allItems,
-        text,
-        analysis,
-        searchProfile: activeProfile,
-        requestedGender: searchResult.requestedGender,
-        approximate: Boolean(searchResult.approximate),
-      }),
-      FINAL_RANK_TIMEOUT_MS,
-      "enrichAndRankItems",
-    );
+    allItems = await enrichAndRankItems({
+      items: searchResult.allItems,
+      text,
+      analysis,
+      searchProfile: activeProfile,
+      requestedGender: searchResult.requestedGender,
+      approximate: Boolean(searchResult.approximate),
+    });
 
-    logStep("after enrichAndRankItems", {
+    console.log("[PERFUME FLOW] after enrichAndRankItems", {
       text,
       ms: Date.now() - startedAt,
       count: allItems?.length || 0,
@@ -1699,7 +1581,7 @@ async function onUserText(ctx) {
         `✅ AI-підбір завершено за ${formatMs(Date.now() - startedAt)}`,
       );
 
-      await safeReply(ctx, "😔 Вдалих збігів не знайдено.");
+      await ctx.reply("😔 Вдалих збігів не знайдено.");
       return true;
     }
 
@@ -1712,9 +1594,9 @@ async function onUserText(ctx) {
     );
 
     if (searchResult.approximate) {
-      await safeReply(ctx, "✨ Підібрав 3 приблизно схожі варіанти з бази:");
+      await ctx.reply("✨ Підібрав 3 приблизно схожі варіанти з бази:");
     } else {
-      await safeReply(ctx, "✨ Підібрав 3 найбільш схожі варіанти:");
+      await ctx.reply("✨ Підібрав 3 найбільш схожі варіанти:");
     }
 
     const { sent, failed } = await sendItemsBatch(ctx, firstBatch);
@@ -1745,12 +1627,12 @@ async function onUserText(ctx) {
     const left = allItems.length - sentIds.length;
 
     if (left > 0) {
-      await safeReply(ctx, `➡️ Є ще ${left} варіантів. Напишіть: "ще" або "дай ще 3"`);
+      await ctx.reply(`➡️ Є ще ${left} варіантів. Напишіть: "ще" або "дай ще 3"`);
     } else {
-      await safeReply(ctx, "✅ Це всі знайдені варіанти за цим запитом.");
+      await ctx.reply("✅ Це всі знайдені варіанти за цим запитом.");
     }
 
-    logStep("completed", {
+    console.log("[PERFUME FLOW] completed", {
       text,
       ms: Date.now() - startedAt,
       sent: sentIds.length,
@@ -1771,8 +1653,7 @@ async function onUserText(ctx) {
       `⚠️ Помилка підбору після ${formatMs(Date.now() - startedAt)}`,
     );
 
-    await safeReply(
-      ctx,
+    await ctx.reply(
       "⚠️ Не вдалося виконати підбір. Спробуйте коротший запит або повторіть ще раз.",
     );
 
