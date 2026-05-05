@@ -365,17 +365,17 @@ function findWeightedFtsCandidates(query, limit = 120) {
           p.quote,
           CAST(10000 - (bm25(
             perfumes_fts,
-            9.0,  -- name
-            6.0,  -- number_code
-            5.0,  -- number_codes
-            4.0,  -- type
-            2.0,  -- for_whom
-            8.0,  -- notes
-            8.0,  -- keywords
-            3.0,  -- description
-            6.0,  -- version
-            2.0,  -- season
-            2.0   -- occasion
+            9.0,
+            6.0,
+            5.0,
+            4.0,
+            2.0,
+            8.0,
+            8.0,
+            3.0,
+            6.0,
+            2.0,
+            2.0
           ) * 1000) AS INTEGER) AS sql_score,
           'fts' AS sql_field
         FROM perfumes_fts

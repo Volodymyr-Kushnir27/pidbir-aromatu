@@ -4,9 +4,14 @@ const { findWeightedTextCandidates } = require("./catalogRepo");
  * Direct search по назві / keywords / version / description / notes.
  *
  * Швидка версія:
- * 1. Спочатку SQLite FTS/LIKE відбирає 50-120 кандидатів.
+ * 1. SQLite FTS/LIKE відбирає 50-120 кандидатів.
  * 2. JS fuzzy/scoring працює тільки по цих кандидатах.
  * 3. Не перебираємо всю БД у Node.js.
+ *
+ * Важливо:
+ * - "лакоста" шукає: лакоста / лакост / лакосте / lacoste / lacost / lakosta / lakost
+ * - "габа" шукає: габа / GABA / Hormone Paris
+ * - "габа" НЕ має тягнути Dolce Gabbana через weak compact match.
  */
 
 function escapeRegExp(value) {
@@ -171,6 +176,7 @@ function applyCommonAliases(value) {
     const source = norm(from);
     if (!source) continue;
 
+    // Без \b, бо \b погано працює з кирилицею у JS.
     const re = new RegExp(`(^|\\s)${escapeRegExp(source)}(?=\\s|$)`, "gi");
     s = s.replace(re, `$1${norm(to)}`);
   }
@@ -275,6 +281,8 @@ function levenshtein(a, b) {
 function fuzzyDistanceLimit(token) {
   const len = String(token || "").length;
 
+  // Короткі слова не fuzzy-матчимо:
+  // "габа" не має ставати "gabbana".
   if (len <= 4) return 0;
   if (len <= 7) return 1;
   if (len <= 10) return 2;
@@ -426,7 +434,17 @@ function scoreField(fieldValue, query, fieldWeight) {
   const cq = compactRepeated(q);
   const cf = compactRepeated(field);
 
-  if (q.length >= 4 && cf.includes(cq)) {
+  // Критично: "gaba" НЕ має матчити "gabbana".
+  if (q === "gaba") {
+    return {
+      score: 0,
+      reason: "",
+      type: "",
+    };
+  }
+
+  // weak compact тільки для 5+ символів.
+  if (q.length >= 5 && cf.includes(cq)) {
     return {
       score: 1400 + fieldWeight,
       reason: `слабкий схожий збіг: ${q}`,
@@ -528,17 +546,93 @@ function buildPrefilterTerms(query) {
   const raw = norm(query);
   const aliased = applyCommonAliases(query);
 
+  const base = [raw, aliased];
+  const extra = [];
+
+  const compactRaw = raw.replace(/\s+/g, "");
+  const compactAliased = aliased.replace(/\s+/g, "");
+
+  // Lacoste:
+  // Якщо користувач пише "лакоста", треба шукати і кирилицю, і латиницю.
+  if (
+    compactRaw.includes("лакост") ||
+    compactRaw.includes("лакоста") ||
+    compactRaw.includes("лакосте") ||
+    compactAliased.includes("lacoste")
+  ) {
+    extra.push(
+      "лакоста",
+      "лакост",
+      "лакосте",
+      "lacoste",
+      "lacost",
+      "lakosta",
+      "lakost",
+      "essential",
+      "эссеншл",
+      "эссеншел",
+      "ессеншл",
+      "ессеншел",
+      "есеншл",
+      "есеншел",
+    );
+  }
+
+  // GABA / Hormone Paris:
+  // Не плутати з Gabbana.
+  if (
+    compactRaw.includes("габа") ||
+    compactAliased.includes("gaba") ||
+    compactRaw.includes("hormone") ||
+    compactRaw.includes("гормон") ||
+    compactRaw.includes("хормон")
+  ) {
+    extra.push(
+      "габа",
+      "gaba",
+      "hormone",
+      "hormone paris",
+      "гормон",
+      "хормон",
+      "париж",
+      "паріс",
+    );
+  }
+
+  // Good Girl.
+  if (
+    compactRaw.includes("дівчин") ||
+    compactRaw.includes("девоч") ||
+    compactRaw.includes("гуд") ||
+    compactAliased.includes("goodgirl")
+  ) {
+    extra.push(
+      "good girl",
+      "good",
+      "girl",
+      "гуд",
+      "герл",
+      "гірл",
+      "гьорл",
+      "дівчинка",
+      "девочка",
+    );
+  }
+
   const rawTokens = raw.split(/\s+/).filter((x) => x.length >= 2);
   const aliasedTokens = aliased.split(/\s+/).filter((x) => x.length >= 2);
 
-  const stems = [...rawTokens, ...aliasedTokens]
+  const stems = [...rawTokens, ...aliasedTokens, ...extra]
     .map((x) => stemToken(x))
     .filter((x) => x.length >= 2);
 
-  return unique([raw, aliased, ...rawTokens, ...aliasedTokens, ...stems]).slice(
-    0,
-    16,
-  );
+  return unique([
+    ...base,
+    ...extra,
+    ...rawTokens,
+    ...aliasedTokens,
+    ...stems,
+  ]).slice(0, 24);
 }
 
 function searchByNameAndKeywords(query, options = {}) {
@@ -597,6 +691,7 @@ function hasStrongDirectMatch(items = []) {
 
   const score = Number(first.match_score || 0);
   const type = String(first.direct_match_type || "");
+  const field = String(first.direct_match_field || "");
 
   if (
     type === "exact_full" ||
@@ -608,6 +703,15 @@ function hasStrongDirectMatch(items = []) {
 
   if (type === "soft_token") {
     return score >= 7000;
+  }
+
+  // FTS/SQL по name/keywords/notes також може бути сильним direct-збігом.
+  if (
+    type === "sql_prefilter" &&
+    score >= 8000 &&
+    ["keywords", "name", "notes", "fts"].includes(field)
+  ) {
+    return true;
   }
 
   return false;

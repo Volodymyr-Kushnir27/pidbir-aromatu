@@ -21,7 +21,7 @@ try {
       `
       SELECT COUNT(*) AS count
       FROM perfumes_fts
-      WHERE perfumes_fts MATCH 'creed* OR крид* OR lacoste* OR лакост*'
+      WHERE perfumes_fts MATCH 'creed* OR крид* OR lacoste* OR лакост* OR gaba* OR габа*'
       `,
     )
     .get();
