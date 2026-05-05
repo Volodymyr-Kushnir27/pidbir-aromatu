@@ -992,7 +992,7 @@ function isFollowupForMore(text, hasSavedSearch = false) {
 
 function parseBatchSize(text, fallback = 3) {
   const t = String(text || "").toLowerCase();
-  const m = t.match(/\b(\d{1,2})\b);
+  const m = t.match(/\b(\d{1,2})\b/);
 
   if (!m) return fallback;
 
