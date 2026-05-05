@@ -584,27 +584,54 @@ function extractUsefulTokens(text) {
 
 function shouldUseDirectNameSearch(text) {
   const t = norm(text);
-
   if (!t) return false;
 
-  // Якщо це запит-опис, не запускаємо важкий direct search.
-  // Такі запити має розбирати AI.
-  const semanticPatterns = [
-    /\b(аромат|парфум|духи)\s+з\b/i,
-    /\b(з\s+нотою|з\s+нотами|нота|ноти|ноткою)\b/i,
-    /\b(підбери|підкажи|знайди|хочу|треба|потрібно)\b/i,
-    /\b(схожий|схожа|схоже|як|типу)\b/i,
-  ];
+  const tokens = extractUsefulTokens(t);
 
-  if (semanticPatterns.some((re) => re.test(t))) {
+  // Direct search тільки для 1 короткого слова:
+  // "Габа", "Лакоста", "Lacoste", "Baccarat", "Kirke"
+  //
+  // Все інше — одразу в AI:
+  // "аромат з нотою перцю"
+  // "підбери щось з персиком"
+  // "гарна дівчинка"
+  // "good girl"
+  // "light blue"
+  if (tokens.length !== 1) {
     return false;
   }
 
-  const usefulTokens = extractUsefulTokens(t);
+  const token = tokens[0];
 
-  // Direct search тільки для коротких назва/бренд-запитів.
-  // Наприклад: "Габа", "Лакоста", "Good Girl", "Light Blue".
-  return usefulTokens.length > 0 && usefulTokens.length <= 3;
+  if (token.length > 10) {
+    return false;
+  }
+
+  // Не запускаємо direct search для службових слів.
+  const blocked = new Set([
+    "аромат",
+    "аромату",
+    "парфум",
+    "парфуми",
+    "духи",
+    "нотою",
+    "нота",
+    "ноти",
+    "нотами",
+    "схожий",
+    "схожа",
+    "схоже",
+    "підбери",
+    "знайди",
+    "хочу",
+    "треба",
+  ]);
+
+  if (blocked.has(token)) {
+    return false;
+  }
+
+  return true;
 }
 
 function createRelaxedSearchProfile(searchProfile, analysis, userText) {
