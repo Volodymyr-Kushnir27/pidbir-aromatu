@@ -1155,112 +1155,281 @@ async function onUserText(ctx) {
 
   incrementSearchCounterForActor(ctx);
 
-  const handledCode = await sendCodeMatches(ctx, text);
-if (handledCode) return true;
-
-/**
- * Direct name / keywords search.
- *
- * Це перший рівень пошуку:
- * - назва
- * - keywords
- * - version
- * - description
- * - notes
- *
- * Приклад:
- * "Габа" →
- * 1. точний GABA / Габа
- * 2. Hormone GABA
- * 3. слабші збіги типу Gabbana
- */
-const directMatches = searchByNameAndKeywords(text, {
-  limit: SEARCH.LIMIT_CANDIDATES || 100,
-  minScore: 1200,
-});
-
-if (hasStrongDirectMatch(directMatches)) {
-  clearLastSearch(ctx);
-
-  const firstBatch = directMatches.slice(0, 3);
-
-  await ctx.reply(
-    `✅ Знайшов ${directMatches.length} варіанти за назвою / ключовими словами.\n\nСпочатку показую 100% збіги, далі — менш точні.`,
-  );
-
-  const { sent, failed } = await sendItemsBatch(ctx, firstBatch);
-
-  if (failed.length) {
-    console.error(
-      "Direct search failed items:",
-      failed.map((x) => ({ id: x.id, name: x.name })),
-    );
-  }
-
-  const sentIds = sent.map((x) => x.id);
-
-  setLastSearch(ctx, {
-    query: text,
-    analysis: null,
-    searchProfile: null,
-    requestedGender: null,
-    searchMode: "direct_name_keyword",
-    approximate: false,
-
-    primaryItems: directMatches,
-    fallbackItems: [],
-    sentIds,
-    offset: sentIds.length,
-  });
-
-  const left = directMatches.length - sentIds.length;
-
-  if (left > 0) {
-    await ctx.reply(`➡️ Є ще ${left} варіантів. Напишіть: "ще" або "дай ще 3"`);
-  } else {
-    await ctx.reply("✅ Це всі знайдені варіанти за цим запитом.");
-  }
-
-  return true;
-}
-
-// Якщо точного direct-збігу немає, але старий exactByName щось знайшов — показуємо його.
-const exactByName = findByExactName(text);
-
-if (exactByName) {
-  clearLastSearch(ctx);
-  await ctx.reply(`✅ Знайшов точний збіг за назвою ${exactByName.name}:`);
-  await sendPerfumeCard(ctx, exactByName, { notes: true, season: true });
-  return true;
-}
-
   const startedAt = Date.now();
 
   const progressMsg = await createProgressMessage(
     ctx,
-    "🔎 AI-підбір запущено...\n\n1/5 Перевіряю базу\n2/5 Аналізую запит як парфумерний консультант",
+    [
+      "🔎 AI-підбір запущено...",
+      "",
+      "1/7 Перевіряю код аромату",
+      "2/7 Шукаю прямі збіги по назві",
+      "3/7 Перевіряю ключові слова",
+    ].join("\n"),
   );
 
-  let analysis = null;
-  let searchProfile = null;
-  let searchResult = null;
-  let allItems = [];
-
   try {
+    console.log("[PERFUME FLOW] search started", {
+      text,
+      userId: ctx.from?.id,
+    });
+
+    /**
+     * 1. Пошук по коду.
+     */
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      [
+        "🔎 AI-підбір запущено...",
+        "",
+        "1/7 Перевіряю код аромату...",
+        "2/7 Очікую результат",
+        "3/7 Очікую результат",
+      ].join("\n"),
+    );
+
+    const handledCode = await sendCodeMatches(ctx, text);
+
+    if (handledCode) {
+      await updateProgressMessage(
+        ctx,
+        progressMsg,
+        `✅ Пошук завершено за ${formatMs(Date.now() - startedAt)}\n\nЗнайшов збіг по коду.`,
+      );
+
+      console.log("[PERFUME FLOW] completed by code", {
+        text,
+        ms: Date.now() - startedAt,
+      });
+
+      return true;
+    }
+
+    /**
+     * 2. Direct name / keywords search.
+     *
+     * Перший локальний рівень пошуку:
+     * - назва
+     * - keywords
+     * - version
+     * - description
+     * - notes
+     *
+     * Приклад:
+     * "Габа" →
+     * 1. точний GABA / Габа
+     * 2. Hormone GABA
+     * 3. слабші збіги типу Gabbana
+     */
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      [
+        "🔎 AI-підбір запущено...",
+        "",
+        "1/7 Код перевірено — збігу немає",
+        "2/7 Шукаю прямі збіги по назві / бренду",
+        "3/7 Перевіряю keywords / опис / ноти",
+      ].join("\n"),
+    );
+
+    const directMatches = searchByNameAndKeywords(text, {
+      limit: SEARCH.LIMIT_CANDIDATES || 100,
+      minScore: 1200,
+    });
+
+    console.log("[PERFUME FLOW] direct search result", {
+      text,
+      count: directMatches.length,
+      strong: hasStrongDirectMatch(directMatches),
+      first: directMatches.slice(0, 5).map((x) => ({
+        id: x.id,
+        name: x.name,
+        score: x.match_score,
+        type: x.direct_match_type,
+        field: x.direct_match_field,
+      })),
+    });
+
+    if (hasStrongDirectMatch(directMatches)) {
+      clearLastSearch(ctx);
+
+      const firstBatch = directMatches.slice(0, 3);
+
+      await updateProgressMessage(
+        ctx,
+        progressMsg,
+        [
+          `✅ Пошук завершено за ${formatMs(Date.now() - startedAt)}`,
+          "",
+          "Знайшов сильні збіги по назві / ключових словах.",
+          `Усього знайдено: ${directMatches.length}`,
+        ].join("\n"),
+      );
+
+      await ctx.reply(
+        `✅ Знайшов ${directMatches.length} варіанти за назвою / ключовими словами.\n\nСпочатку показую 100% збіги, далі — менш точні.`,
+      );
+
+      const { sent, failed } = await sendItemsBatch(ctx, firstBatch);
+
+      if (failed.length) {
+        console.error(
+          "Direct search failed items:",
+          failed.map((x) => ({ id: x.id, name: x.name })),
+        );
+      }
+
+      const sentIds = sent.map((x) => x.id);
+
+      setLastSearch(ctx, {
+        query: text,
+        analysis: null,
+        searchProfile: null,
+        requestedGender: null,
+        searchMode: "direct_name_keyword",
+        approximate: false,
+
+        primaryItems: directMatches,
+        fallbackItems: [],
+        sentIds,
+        offset: sentIds.length,
+      });
+
+      const left = directMatches.length - sentIds.length;
+
+      if (left > 0) {
+        await ctx.reply(`➡️ Є ще ${left} варіантів. Напишіть: "ще" або "дай ще 3"`);
+      } else {
+        await ctx.reply("✅ Це всі знайдені варіанти за цим запитом.");
+      }
+
+      console.log("[PERFUME FLOW] completed by direct search", {
+        text,
+        ms: Date.now() - startedAt,
+        total: directMatches.length,
+      });
+
+      return true;
+    }
+
+    /**
+     * 3. Старий exact name fallback.
+     */
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      [
+        "🔎 AI-підбір запущено...",
+        "",
+        "1/7 Код перевірено — збігу немає",
+        "2/7 Сильних збігів по назві немає",
+        "3/7 Перевіряю точну назву в базі",
+      ].join("\n"),
+    );
+
+    const exactByName = findByExactName(text);
+
+    if (exactByName) {
+      clearLastSearch(ctx);
+
+      await updateProgressMessage(
+        ctx,
+        progressMsg,
+        `✅ Пошук завершено за ${formatMs(Date.now() - startedAt)}\n\nЗнайшов точний збіг за назвою.`,
+      );
+
+      await ctx.reply(`✅ Знайшов точний збіг за назвою ${exactByName.name}:`);
+      await sendPerfumeCard(ctx, exactByName, { notes: true, season: true });
+
+      console.log("[PERFUME FLOW] completed by exact name", {
+        text,
+        id: exactByName.id,
+        name: exactByName.name,
+        ms: Date.now() - startedAt,
+      });
+
+      return true;
+    }
+
+    /**
+     * 4. Якщо direct search не дав сильного збігу —
+     * запускаємо AI-аналіз.
+     */
+    await updateProgressMessage(
+      ctx,
+      progressMsg,
+      [
+        "🔎 AI-підбір запущено...",
+        "",
+        "1/7 Код перевірено",
+        "2/7 Назву і keywords перевірено",
+        "3/7 Точного збігу немає",
+        "4/7 Аналізую запит як парфумерний консультант",
+      ].join("\n"),
+    );
+
+    let analysis = null;
+    let searchProfile = null;
+    let searchResult = null;
+    let allItems = [];
+
     analysis = await analyzePerfumeIntent(text);
+
+    console.log("[PERFUME FLOW] analysis ready", {
+      text,
+      query_type: analysis?.query_type,
+      target_name: analysis?.target_name,
+      brand: analysis?.brand,
+      gender: analysis?.gender,
+      search_terms: analysis?.search_terms,
+      notes_top: analysis?.notes_top,
+      notes_heart: analysis?.notes_heart,
+      notes_base: analysis?.notes_base,
+      accords: analysis?.accords,
+      style: analysis?.style,
+    });
 
     await updateProgressMessage(
       ctx,
       progressMsg,
-      "🔎 AI-підбір запущено...\n\n1/5 БД перевірено\n2/5 Запит розібрано\n3/5 Будую пошуковий профіль",
+      [
+        "🔎 AI-підбір запущено...",
+        "",
+        "1/7 Код перевірено",
+        "2/7 Назву і keywords перевірено",
+        "3/7 Точного збігу немає",
+        "4/7 Запит розібрано",
+        "5/7 Будую пошуковий профіль",
+      ].join("\n"),
     );
 
     searchProfile = await buildSearchProfile(analysis);
 
+    console.log("[PERFUME FLOW] search profile ready", {
+      text,
+      gender: searchProfile?.gender,
+      raw_terms: searchProfile?.raw_terms,
+      notes_include: searchProfile?.notes_include,
+      notes_prefer: searchProfile?.notes_prefer,
+      accords: searchProfile?.accords,
+      style_tags: searchProfile?.style_tags,
+    });
+
     await updateProgressMessage(
       ctx,
       progressMsg,
-      "🔎 AI-підбір запущено...\n\n1/5 БД перевірено\n2/5 Запит розібрано\n3/5 Профіль готовий\n4/5 Шукаю в базі",
+      [
+        "🔎 AI-підбір запущено...",
+        "",
+        "1/7 Код перевірено",
+        "2/7 Назву і keywords перевірено",
+        "3/7 Точного збігу немає",
+        "4/7 Запит розібрано",
+        "5/7 Профіль готовий",
+        "6/7 Шукаю кандидатів у базі",
+      ].join("\n"),
     );
 
     searchResult = await runSearchWithFallbackProfiles({
@@ -1270,6 +1439,22 @@ if (exactByName) {
     });
 
     const activeProfile = searchResult.searchProfileUsed || searchProfile;
+
+    console.log("[PERFUME FLOW] db search result", {
+      text,
+      searchMode: searchResult.searchMode,
+      approximate: searchResult.approximate,
+      requestedGender: searchResult.requestedGender,
+      primaryCount: searchResult.primaryItems?.length || 0,
+      fallbackCount: searchResult.fallbackItems?.length || 0,
+      allCount: searchResult.allItems?.length || 0,
+      first: searchResult.allItems?.slice(0, 5).map((x) => ({
+        id: x.id,
+        name: x.name,
+        score: x.match_score,
+        gender: x.gender,
+      })),
+    });
 
     if (!searchResult.allItems?.length) {
       clearLastSearch(ctx);
@@ -1281,7 +1466,7 @@ if (exactByName) {
       );
 
       await ctx.reply(
-        "😔 Вдалих збігів не знайдено.\n\nЯ перевірив назву, ноти, ключові слова, опис і стиль аромату, але в базі немає навіть приблизно релевантного напряму.",
+        "😔 Вдалих збігів не знайдено.\n\nЯ перевірив код, назву, ключові слова, ноти, опис і стиль аромату, але в базі немає навіть приблизно релевантного напряму.",
       );
 
       return true;
@@ -1300,7 +1485,17 @@ if (exactByName) {
     await updateProgressMessage(
       ctx,
       progressMsg,
-      "🔎 AI-підбір запущено...\n\n1/5 БД перевірено\n2/5 Запит розібрано\n3/5 Профіль готовий\n4/5 Кандидати знайдені\n5/5 Роблю фінальний відбір",
+      [
+        "🔎 AI-підбір запущено...",
+        "",
+        "1/7 Код перевірено",
+        "2/7 Назву і keywords перевірено",
+        "3/7 Точного збігу немає",
+        "4/7 Запит розібрано",
+        "5/7 Профіль готовий",
+        "6/7 Кандидати знайдені",
+        "7/7 Роблю фінальний відбір",
+      ].join("\n"),
     );
 
     allItems = await enrichAndRankItems({
@@ -1310,6 +1505,18 @@ if (exactByName) {
       searchProfile: activeProfile,
       requestedGender: searchResult.requestedGender,
       approximate: Boolean(searchResult.approximate),
+    });
+
+    console.log("[PERFUME FLOW] final ranking ready", {
+      text,
+      count: allItems.length,
+      approximate: searchResult.approximate,
+      first: allItems.slice(0, 5).map((x) => ({
+        id: x.id,
+        name: x.name,
+        score: x.match_score,
+        gender: x.gender,
+      })),
     });
 
     if (!allItems.length) {
@@ -1371,6 +1578,15 @@ if (exactByName) {
     } else {
       await ctx.reply("✅ Це всі знайдені варіанти за цим запитом.");
     }
+
+    console.log("[PERFUME FLOW] completed", {
+      text,
+      ms: Date.now() - startedAt,
+      sent: sentIds.length,
+      left,
+      searchMode: searchResult.searchMode,
+      approximate: searchResult.approximate,
+    });
 
     return true;
   } catch (e) {
