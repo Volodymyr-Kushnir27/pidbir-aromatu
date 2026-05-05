@@ -60,6 +60,133 @@ function containsStyleIntent(text) {
   );
 }
 
+/**
+ * Жорсткий локальний словник.
+ * Він спрацьовує ДО GPT, щоб бот не вигадував "аромат схожий на людину".
+ */
+const KNOWN_REFERENCE_ALIASES = [
+  {
+    aliases: [
+      "діма білан",
+      "дима билан",
+      "dima bilan",
+      "bilan",
+      "білан",
+      "билан",
+      "excite by dima bilan",
+      "oriflame excite",
+      "ексайт білан",
+      "иксайт билан",
+    ],
+    analysis: {
+      found: true,
+      query_type: "reference_perfume",
+      target_name: "Excite by Dima Bilan",
+      brand: "Oriflame",
+      corrected_query: "Excite by Dima Bilan Oriflame",
+      translated_query: "Excite by Dima Bilan Oriflame",
+      normalized_query: "excite by dima bilan oriflame",
+      name_aliases: [
+        "діма білан",
+        "дима билан",
+        "dima bilan",
+        "excite",
+        "oriflame excite",
+        "excite by dima bilan",
+      ],
+      possible_names: [
+        "Excite by Dima Bilan",
+        "Oriflame Excite by Dima Bilan",
+      ],
+      gender: "male",
+      seasons: ["spring", "summer"],
+      style: ["fresh", "aquatic", "fougere", "fruity", "green", "musky", "woody"],
+      notes_top: ["bergamot", "melon", "quince", "wormwood"],
+      notes_heart: ["tea", "sea water", "tarragon"],
+      notes_base: ["musk", "cedar", "moss"],
+      accords: ["fresh", "aquatic", "fougere", "fruity", "green", "woody", "musky"],
+      search_terms: [
+        "excite",
+        "oriflame",
+        "dima bilan",
+        "діма білан",
+        "дима билан",
+        "бергамот",
+        "bergamot",
+        "диня",
+        "melon",
+        "айва",
+        "quince",
+        "полин",
+        "wormwood",
+        "чай",
+        "tea",
+        "морська вода",
+        "sea water",
+        "тархун",
+        "tarragon",
+        "мускус",
+        "musk",
+        "кедр",
+        "cedar",
+        "мох",
+        "moss",
+        "свіжий",
+        "fresh",
+        "водний",
+        "aquatic",
+        "фужерний",
+        "fougere",
+        "чоловічий",
+      ],
+      intent_context: {
+        best_for: ["daily", "office", "warm weather"],
+        projection: "medium",
+        longevity: "medium",
+        age_group: "adult",
+        image_style: ["clean", "fresh", "casual"],
+      },
+      user_friendly_reply:
+        "Зрозумів орієнтир: Oriflame Excite by Dima Bilan. Це чоловічий свіжий водно-фужерний аромат. Підберу чоловічі та унісекс варіанти з бази за нотами й характером.",
+      search_hint_text: "Орієнтир: Oriflame Excite by Dima Bilan, чоловічий fresh aquatic fougere",
+    },
+  },
+];
+
+function findKnownReferenceAlias(userText) {
+  const t = norm(userText);
+  if (!t) return null;
+
+  for (const entry of KNOWN_REFERENCE_ALIASES) {
+    const matched = entry.aliases.some((alias) => t.includes(norm(alias)));
+    if (matched) return { ...entry.analysis };
+  }
+
+  return null;
+}
+
+function mergeKnownReferenceIfNeeded(result, userText) {
+  const known = findKnownReferenceAlias(userText);
+  if (!known) return result;
+
+  return {
+    ...(result || {}),
+    ...known,
+    search_terms: uniq([
+      ...(result?.search_terms || []),
+      ...(known.search_terms || []),
+    ]),
+    name_aliases: uniq([
+      ...(result?.name_aliases || []),
+      ...(known.name_aliases || []),
+    ]),
+    possible_names: uniq([
+      ...(result?.possible_names || []),
+      ...(known.possible_names || []),
+    ]),
+  };
+}
+
 function extractDirectReferenceCandidate(text) {
   const raw = String(text || "").trim();
   const quoted = extractQuotedNames(raw);
@@ -83,7 +210,8 @@ function extractDirectReferenceCandidate(text) {
 }
 
 function postNormalizeReferenceFields(result, userText) {
-  const out = { ...(result || {}) };
+  const merged = mergeKnownReferenceIfNeeded(result, userText);
+  const out = { ...(merged || {}) };
 
   out.found = Boolean(out.found);
   out.query_type = out.query_type || "unknown";
@@ -183,6 +311,11 @@ async function analyzePerfumeIntent(userText) {
   const hasStyle = containsStyleIntent(userText);
   const maybeCode = looksLikeCode(userText);
 
+  const knownReference = findKnownReferenceAlias(userText);
+  if (knownReference) {
+    return postNormalizeReferenceFields(knownReference, userText);
+  }
+
   const system = `
 Ти AI-консультант парфумерного Telegram-бота.
 
@@ -230,12 +363,26 @@ AI має розібрати запит, виправити орфографію
 КРИТИЧНО ВАЖЛИВО:
 - Якщо користувач вводить переклад, трансліт або помилкову назву аромату, НЕ вигадуй новий аромат.
 - Спочатку визнач можливу оригінальну назву, виправ орфографію, переклади за потреби і поверни варіанти для пошуку в базі.
+- Якщо запит "Діма Білан", "Дима Билан", "Dima Bilan", "Oriflame Excite" — це чоловічий аромат "Excite by Dima Bilan" від Oriflame. Gender = "male". Ноти: bergamot, melon, quince, wormwood, tea, sea water, tarragon, musk, cedar, moss. Акорди: fresh, aquatic, fougere, fruity, green, woody, musky.
 - Якщо запит "плохая девочка" або "погана дівчинка", це НЕ новий аромат Twins. Це можливий alias до "Good Girl Gone Bad" / "Good Girl".
 - Якщо запит "гарна дівчинка", це можливий alias до "Good Girl".
 - Якщо запит "лакоста", це Lacoste / Лакост.
 - Якщо запит "габа", це GABA / Hormone GABA, НЕ Gabbana.
 
 ПРИКЛАДИ:
+"діма білан" ->
+{
+  "query_type": "reference_perfume",
+  "target_name": "Excite by Dima Bilan",
+  "brand": "Oriflame",
+  "gender": "male",
+  "notes_top": ["bergamot", "melon", "quince", "wormwood"],
+  "notes_heart": ["tea", "sea water", "tarragon"],
+  "notes_base": ["musk", "cedar", "moss"],
+  "accords": ["fresh", "aquatic", "fougere", "fruity", "green", "woody", "musky"],
+  "search_terms": ["oriflame", "excite", "dima bilan", "бергамот", "диня", "айва", "полин", "чай", "морська вода", "тархун", "мускус", "кедр", "мох", "свіжий", "водний", "фужерний", "чоловічий"]
+}
+
 "плохая девочка" ->
 {
   "query_type": "reference_perfume",

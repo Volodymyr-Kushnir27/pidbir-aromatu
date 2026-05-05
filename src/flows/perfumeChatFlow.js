@@ -6,9 +6,15 @@ const { writeReferencePerfumeIntro } = require("../llm/writeReferencePerfumeIntr
 const { buildSearchProfile } = require("../llm/perfumeSearchProfile");
 const { attachReasons } = require("../llm/resultExplainer");
 const { rerankAndExplain } = require("../llm/rerankExplainer");
-const { searchByNameAndKeywords,hasStrongDirectMatch,} = require("../search/directNameKeywordSearch");
+const {
+  searchByNameAndKeywords,
+  hasStrongDirectMatch,
+} = require("../search/directNameKeywordSearch");
 const { findCandidates } = require("../search/candidateSearch");
-const {rerankTopK, normalizeGenderValue,} = require("../search/candidateRerank");
+const {
+  rerankTopK,
+  normalizeGenderValue,
+} = require("../search/candidateRerank");
 const {
   findByExactName,
   findByNumberCode,
@@ -24,13 +30,372 @@ const usersStore = require("../storage/usersStore");
 
 const modeState = new Map();
 
-const CLOSE_SCORE_DELTA_FOR_UNISEX = Number(
-  process.env.UNISEX_PRIORITY_DELTA || 80,
-);
-
 const MIN_STRICT_SCORE = Number(process.env.SEARCH_MIN_STRICT_SCORE || 8);
 const MIN_RELAXED_SCORE = Number(process.env.SEARCH_MIN_RELAXED_SCORE || 4);
 const APPROX_RANDOM_WINDOW = Number(process.env.APPROX_RANDOM_WINDOW || 30);
+
+/* =========================
+   Known reference aliases
+========================= */
+
+const KNOWN_REFERENCES = [
+  {
+    key: "oriflame_excite_dima_bilan",
+    aliases: [
+      "діма білан",
+      "дима билан",
+      "дима білан",
+      "dima bilan",
+      "bilan",
+      "білан",
+      "билан",
+      "оріфлейм білан",
+      "орифлейм билан",
+      "oriflame bilan",
+      "oriflame excite",
+      "excite by dima bilan",
+      "ексайт білан",
+      "иксайт билан",
+      "excite білан",
+      "excite билан",
+    ],
+    analysis: {
+      found: true,
+      query_type: "reference_perfume",
+      target_name: "Excite by Dima Bilan",
+      brand: "Oriflame",
+      corrected_query: "Oriflame Excite by Dima Bilan",
+      translated_query: "Oriflame Excite by Dima Bilan",
+      normalized_query: "oriflame excite by dima bilan",
+      name_aliases: [
+        "діма білан",
+        "дима билан",
+        "dima bilan",
+        "oriflame excite",
+        "excite by dima bilan",
+      ],
+      possible_names: [
+        "Excite by Dima Bilan",
+        "Oriflame Excite by Dima Bilan",
+        "Oriflame Excite",
+      ],
+      gender: "male",
+      seasons: ["spring", "summer"],
+      style: [
+        "fresh",
+        "aquatic",
+        "fougere",
+        "fruity",
+        "green",
+        "woody",
+        "musky",
+      ],
+      notes_top: ["bergamot", "melon", "quince", "wormwood"],
+      notes_heart: ["tea", "sea water", "tarragon"],
+      notes_base: ["musk", "cedar", "moss"],
+      accords: [
+        "fresh",
+        "aquatic",
+        "marine",
+        "fougere",
+        "fruity",
+        "green",
+        "woody",
+        "musky",
+      ],
+      search_terms: [
+        "oriflame",
+        "excite",
+        "dima bilan",
+        "діма білан",
+        "дима билан",
+        "бергамот",
+        "bergamot",
+        "диня",
+        "melon",
+        "айва",
+        "quince",
+        "полин",
+        "wormwood",
+        "чай",
+        "tea",
+        "морська вода",
+        "sea water",
+        "marine",
+        "aquatic",
+        "тархун",
+        "tarragon",
+        "мускус",
+        "musk",
+        "кедр",
+        "cedar",
+        "мох",
+        "moss",
+        "свіжий",
+        "fresh",
+        "водний",
+        "фужерний",
+        "fougere",
+        "фруктовий",
+        "fruity",
+        "чоловічий",
+        "male",
+      ],
+      intent_context: {
+        best_for: ["daily", "office", "warm weather"],
+        projection: "medium",
+        longevity: "medium",
+        age_group: "adult",
+        image_style: ["clean", "fresh", "casual"],
+      },
+      user_friendly_reply:
+        "Зрозумів орієнтир: Oriflame Excite by Dima Bilan. Це чоловічий свіжий водно-фужерний аромат. Підберу чоловічі та унісекс варіанти з бази за нотами й характером.",
+      search_hint_text:
+        "Орієнтир: Oriflame Excite by Dima Bilan, чоловічий fresh aquatic fougere",
+    },
+    profile: {
+      query_type: "reference_perfume",
+      gender: "male",
+      season: ["spring", "summer"],
+      notes_include: [
+        "bergamot",
+        "melon",
+        "quince",
+        "wormwood",
+        "tea",
+        "sea water",
+        "tarragon",
+        "musk",
+        "cedar",
+        "moss",
+        "бергамот",
+        "диня",
+        "айва",
+        "полин",
+        "чай",
+        "морська вода",
+        "тархун",
+        "мускус",
+        "кедр",
+        "мох",
+      ],
+      notes_include_synonyms: [
+        "aquatic",
+        "marine",
+        "ozonic",
+        "fresh",
+        "fougere",
+        "fruity",
+        "green",
+        "woody",
+        "musky",
+      ],
+      notes_prefer: [
+        "bergamot",
+        "melon",
+        "tea",
+        "sea water",
+        "musk",
+        "cedar",
+        "moss",
+      ],
+      notes_prefer_synonyms: [
+        "fresh",
+        "aquatic",
+        "marine",
+        "fougere",
+        "fruity",
+        "woody",
+      ],
+      accords: [
+        "fresh",
+        "aquatic",
+        "marine",
+        "fougere",
+        "fruity",
+        "green",
+        "woody",
+        "musky",
+      ],
+      accord_synonyms: [
+        "свіжий",
+        "водний",
+        "морський",
+        "фужерний",
+        "фруктовий",
+        "зелений",
+        "деревний",
+        "мускусний",
+      ],
+      style_tags: [
+        "fresh",
+        "clean",
+        "aquatic",
+        "casual",
+        "daily",
+        "office",
+        "summer",
+      ],
+      style_synonyms: [
+        "свіжий",
+        "чистий",
+        "водний",
+        "легкий",
+        "денний",
+        "на кожен день",
+      ],
+      exclude_tags: [],
+      raw_terms: [
+        "oriflame",
+        "excite",
+        "dima bilan",
+        "діма білан",
+        "дима билан",
+        "bergamot",
+        "melon",
+        "quince",
+        "wormwood",
+        "tea",
+        "sea water",
+        "tarragon",
+        "musk",
+        "cedar",
+        "moss",
+        "fresh",
+        "aquatic",
+        "fougere",
+      ],
+      best_for: ["daily", "office", "warm weather"],
+      projection: "medium",
+      longevity: "medium",
+      age_group: "adult",
+      image_style: ["clean", "fresh", "casual"],
+    },
+  },
+];
+
+function findKnownReference(text) {
+  const t = norm(text);
+  if (!t) return null;
+
+  for (const ref of KNOWN_REFERENCES) {
+    const matched = ref.aliases.some((alias) => {
+      const a = norm(alias);
+      return a && t.includes(a);
+    });
+
+    if (matched) return ref;
+  }
+
+  return null;
+}
+
+function mergeKnownReferenceAnalysis(analysis, knownRef) {
+  if (!knownRef?.analysis) return analysis;
+
+  const ref = knownRef.analysis;
+
+  return {
+    ...(analysis || {}),
+    ...ref,
+    search_terms: uniqStrings([
+      ...safeArray(analysis?.search_terms),
+      ...safeArray(ref.search_terms),
+    ]),
+    name_aliases: uniqStrings([
+      ...safeArray(analysis?.name_aliases),
+      ...safeArray(ref.name_aliases),
+    ]),
+    possible_names: uniqStrings([
+      ...safeArray(analysis?.possible_names),
+      ...safeArray(ref.possible_names),
+    ]),
+    style: uniqStrings([
+      ...safeArray(analysis?.style),
+      ...safeArray(ref.style),
+    ]),
+    accords: uniqStrings([
+      ...safeArray(analysis?.accords),
+      ...safeArray(ref.accords),
+    ]),
+    notes_top: uniqStrings([
+      ...safeArray(analysis?.notes_top),
+      ...safeArray(ref.notes_top),
+    ]),
+    notes_heart: uniqStrings([
+      ...safeArray(analysis?.notes_heart),
+      ...safeArray(ref.notes_heart),
+    ]),
+    notes_base: uniqStrings([
+      ...safeArray(analysis?.notes_base),
+      ...safeArray(ref.notes_base),
+    ]),
+    gender: ref.gender || analysis?.gender || "unknown",
+  };
+}
+
+function mergeKnownReferenceProfile(searchProfile, knownRef) {
+  if (!knownRef?.profile) return searchProfile;
+
+  const ref = knownRef.profile;
+
+  return {
+    ...(searchProfile || {}),
+    ...ref,
+    gender: ref.gender || searchProfile?.gender || "unknown",
+    season: uniqStrings([
+      ...safeArray(searchProfile?.season),
+      ...safeArray(ref.season),
+    ]),
+    notes_include: uniqStrings([
+      ...safeArray(searchProfile?.notes_include),
+      ...safeArray(ref.notes_include),
+    ]),
+    notes_include_synonyms: uniqStrings([
+      ...safeArray(searchProfile?.notes_include_synonyms),
+      ...safeArray(ref.notes_include_synonyms),
+    ]),
+    notes_prefer: uniqStrings([
+      ...safeArray(searchProfile?.notes_prefer),
+      ...safeArray(ref.notes_prefer),
+    ]),
+    notes_prefer_synonyms: uniqStrings([
+      ...safeArray(searchProfile?.notes_prefer_synonyms),
+      ...safeArray(ref.notes_prefer_synonyms),
+    ]),
+    accords: uniqStrings([
+      ...safeArray(searchProfile?.accords),
+      ...safeArray(ref.accords),
+    ]),
+    accord_synonyms: uniqStrings([
+      ...safeArray(searchProfile?.accord_synonyms),
+      ...safeArray(ref.accord_synonyms),
+    ]),
+    style_tags: uniqStrings([
+      ...safeArray(searchProfile?.style_tags),
+      ...safeArray(ref.style_tags),
+    ]),
+    style_synonyms: uniqStrings([
+      ...safeArray(searchProfile?.style_synonyms),
+      ...safeArray(ref.style_synonyms),
+    ]),
+    raw_terms: uniqStrings([
+      ...safeArray(searchProfile?.raw_terms),
+      ...safeArray(ref.raw_terms),
+    ]),
+    best_for: uniqStrings([
+      ...safeArray(searchProfile?.best_for),
+      ...safeArray(ref.best_for),
+    ]),
+    projection: ref.projection || searchProfile?.projection || "unknown",
+    longevity: ref.longevity || searchProfile?.longevity || "unknown",
+    age_group: ref.age_group || searchProfile?.age_group || "unknown",
+    image_style: uniqStrings([
+      ...safeArray(searchProfile?.image_style),
+      ...safeArray(ref.image_style),
+    ]),
+  };
+}
 
 /* =========================
    State helpers
@@ -171,53 +536,27 @@ function isPositiveScore(item, minScore = 1) {
   return normalizeScore(item) >= minScore;
 }
 
-function makeSeedFromText(text) {
-  const s = norm(text);
-  let hash = 2166136261;
-
-  for (let i = 0; i < s.length; i += 1) {
-    hash ^= s.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  return Math.abs(hash >>> 0);
-}
-
-function seededRandom(seed) {
-  let x = Number(seed || 1) || 1;
-
-  return function next() {
-    x += 0x6d2b79f5;
-    let t = x;
-
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function shuffleWithSeed(items = [], seedText = "") {
+function shuffleRandom(items = []) {
   const arr = [...items];
-  const rnd = seededRandom(makeSeedFromText(seedText));
 
   for (let i = arr.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(rnd() * (i + 1));
+    const j = Math.floor(Math.random() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
 
   return arr;
 }
 
-function randomizeApproximatePool(items = [], text = "", windowSize = 30) {
-  const clean = uniqById(items)
-    .filter((x) => normalizeScore(x) > 0)
-    .sort((a, b) => {
-      const diff = normalizeScore(b) - normalizeScore(a);
-      if (diff !== 0) return diff;
-      return Number(a.id || 0) - Number(b.id || 0);
-    });
+function sortByScore(items = []) {
+  return uniqById(items).sort((a, b) => {
+    const diff = normalizeScore(b) - normalizeScore(a);
+    if (diff !== 0) return diff;
+    return Number(a.id || 0) - Number(b.id || 0);
+  });
+}
 
+function randomizeRelevantPool(items = [], windowSize = APPROX_RANDOM_WINDOW) {
+  const clean = sortByScore(items).filter((x) => normalizeScore(x) > 0);
   if (!clean.length) return [];
 
   const bestScore = normalizeScore(clean[0]);
@@ -228,27 +567,81 @@ function randomizeApproximatePool(items = [], text = "", windowSize = 30) {
   });
 
   const pool =
-    closeEnough.length >= 6
+    closeEnough.length >= 4
       ? closeEnough.slice(0, windowSize)
       : clean.slice(0, windowSize);
 
-  const shuffledPool = shuffleWithSeed(pool, text);
-
+  const shuffledPool = shuffleRandom(pool);
   const poolIds = new Set(shuffledPool.map((x) => Number(x.id)));
   const rest = clean.filter((x) => !poolIds.has(Number(x.id)));
 
   return [...shuffledPool, ...rest];
 }
 
+function splitByGender(items = []) {
+  const buckets = {
+    unisex: [],
+    female: [],
+    male: [],
+    unknown: [],
+  };
+
+  for (const item of uniqById(items)) {
+    const g = normalizeGenderValue(item.gender);
+
+    if (g === "unisex") buckets.unisex.push(item);
+    else if (g === "female") buckets.female.push(item);
+    else if (g === "male") buckets.male.push(item);
+    else buckets.unknown.push(item);
+  }
+
+  return buckets;
+}
+
+function buildRandomGenderOrderedList(items = [], requestedGender = null) {
+  const req = normalizeGenderValue(requestedGender);
+  const buckets = splitByGender(items);
+
+  const unisex = randomizeRelevantPool(buckets.unisex);
+  const female = randomizeRelevantPool(buckets.female);
+  const male = randomizeRelevantPool(buckets.male);
+  const unknown = randomizeRelevantPool(buckets.unknown);
+
+  if (req === "male") {
+    return uniqById([...male, ...unisex]);
+  }
+
+  if (req === "female") {
+    return uniqById([...female, ...unisex]);
+  }
+
+  if (req === "unisex") {
+    return uniqById([...unisex]);
+  }
+
+  // Якщо стать не вказана:
+  // 1. Унісекс
+  // 2. Жіночі
+  // 3. Чоловічі
+  // 4. Unknown тільки в кінці, якщо є релевантність
+  return uniqById([...unisex, ...female, ...male, ...unknown]);
+}
+
 /* =========================
    Gender logic
 ========================= */
 
-function detectRequestedGender(text, analysis, searchProfile) {
+function detectGenderFromText(text) {
   const t = norm(text);
 
   if (
-    /\b(жіночі|жіночий|жіноче|для жінки|для дівчини|дівочі|женские|женский|для женщины|for women|female)\b/i.test(
+    /\b(унісекс|унісексові|унисекс|unisex|для всіх|для всех)\b/i.test(t)
+  ) {
+    return "unisex";
+  }
+
+  if (
+    /\b(жіночі|жіночий|жіноче|для жінки|для жінок|для дівчини|дівочі|женские|женский|для женщины|для женщин|for women|female|woman|women)\b/i.test(
       t,
     )
   ) {
@@ -256,16 +649,25 @@ function detectRequestedGender(text, analysis, searchProfile) {
   }
 
   if (
-    /\b(чоловічі|чоловічий|чоловіче|для чоловіка|для хлопця|мужские|мужской|для мужчины|for men|male)\b/i.test(
+    /\b(чоловічі|чоловічий|чоловіче|для чоловіка|для чоловіків|для хлопця|мужские|мужской|для мужчины|для мужчин|for men|male|man|men)\b/i.test(
       t,
     )
   ) {
     return "male";
   }
 
-  if (/\b(унісекс|унісексові|unisex)\b/i.test(t)) {
-    return "unisex";
+  return null;
+}
+
+function detectRequestedGender(text, analysis, searchProfile) {
+  const knownRef = findKnownReference(text);
+  if (knownRef?.analysis?.gender) {
+    const g = normalizeGenderValue(knownRef.analysis.gender);
+    if (g !== "unknown") return g;
   }
+
+  const fromText = detectGenderFromText(text);
+  if (fromText) return fromText;
 
   const candidates = [
     analysis?.gender,
@@ -304,43 +706,6 @@ function filterAllowedGender(items = [], requestedGender = null) {
   return (items || []).filter((item) =>
     allowed.has(normalizeGenderValue(item.gender)),
   );
-}
-
-/**
- * Головне правило:
- * - спочатку схожість;
- * - якщо score однаковий або дуже близький, unisex іде вище female/male;
- * - якщо female/male явно точніший по нотах, він лишається вище.
- */
-function sortBySimilarityWithUnisexPriority(
-  items = [],
-  requestedGender = null,
-  closeDelta = CLOSE_SCORE_DELTA_FOR_UNISEX,
-) {
-  const req = normalizeGenderValue(requestedGender);
-
-  return uniqById(items).sort((a, b) => {
-    const as = normalizeScore(a);
-    const bs = normalizeScore(b);
-    const diff = bs - as;
-
-    const aGender = normalizeGenderValue(a.gender);
-    const bGender = normalizeGenderValue(b.gender);
-
-    const canPreferUnisex =
-      req === "female" || req === "male" || req === "unknown" || !req;
-
-    const scoreIsClose = Math.abs(as - bs) <= closeDelta;
-
-    if (canPreferUnisex && scoreIsClose && aGender !== bGender) {
-      if (aGender === "unisex") return -1;
-      if (bGender === "unisex") return 1;
-    }
-
-    if (diff !== 0) return diff;
-
-    return Number(a.id || 0) - Number(b.id || 0);
-  });
 }
 
 /* =========================
@@ -419,10 +784,6 @@ function buildApproximateNoExactReply(analysis, searchProfile) {
   );
 }
 
-function renderMetaComment() {
-  return "";
-}
-
 async function createProgressMessage(ctx, text) {
   try {
     return await ctx.reply(text);
@@ -477,59 +838,24 @@ async function sendItemsBatch(ctx, items) {
    Search helpers
 ========================= */
 
-function makeProfileWithGender(searchProfile, gender) {
-  return {
-    ...(searchProfile || {}),
-    gender,
-  };
-}
-
 function makeComparableSimilarityProfile(searchProfile) {
   return {
     ...(searchProfile || {}),
-    // gender не дає бонус у score.
-    // Стать працює тільки як allowed-filter.
+    // Стать не має додавати score.
+    // Стать використовується окремо як фільтр і порядок груп.
     gender: "unknown",
   };
 }
 
-function runFullDbSearch(searchProfile, gender, limit = 120) {
-  const profile = gender
-    ? makeProfileWithGender(searchProfile, gender)
-    : { ...(searchProfile || {}) };
-
-  return findCandidates(profile, limit);
-}
-
-function runAllowedGenderSimilaritySearch(
-  searchProfile,
-  allowedGenders = [],
-  requestedGender = null,
-  limit = 120,
-) {
-  const allowed = new Set(
-    (allowedGenders || [])
-      .map((x) => normalizeGenderValue(x))
-      .filter((x) => x && x !== "unknown"),
-  );
+function runFullDbSearch(searchProfile, limit = 120) {
+  const comparableProfile = makeComparableSimilarityProfile(searchProfile);
 
   const scanLimit = Math.max(
-    Number(limit || 120) * 4,
-    Number(SEARCH.MAX_ROWS_SCAN || 600),
+    Number(limit || 120) * 5,
+    Number(SEARCH.MAX_ROWS_SCAN || 800),
   );
 
-  const comparableProfile = makeComparableSimilarityProfile(searchProfile);
-  const candidates = findCandidates(comparableProfile, scanLimit);
-
-  const filtered = candidates.filter((item) => {
-    const itemGender = normalizeGenderValue(item.gender);
-    return allowed.has(itemGender);
-  });
-
-  return sortBySimilarityWithUnisexPriority(
-    uniqById(filtered),
-    requestedGender,
-  ).slice(0, limit);
+  return findCandidates(comparableProfile, scanLimit);
 }
 
 function extractUsefulTokens(text) {
@@ -557,6 +883,7 @@ function extractUsefulTokens(text) {
     "парфум",
     "парфюмом",
     "парфумом",
+    "парфуми",
     "духи",
     "потрібно",
     "хочу",
@@ -569,6 +896,7 @@ function extractUsefulTokens(text) {
     "for",
     "with",
     "like",
+    "similar",
   ]);
 
   return uniqStrings(
@@ -581,22 +909,14 @@ function extractUsefulTokens(text) {
   ).slice(0, 15);
 }
 
-
 function shouldUseDirectNameSearch(text) {
   const t = norm(text);
   if (!t) return false;
 
+  if (findKnownReference(t)) return false;
+
   const tokens = extractUsefulTokens(t);
 
-  // Direct search тільки для 1 короткого слова:
-  // "Габа", "Лакоста", "Lacoste", "Baccarat", "Kirke"
-  //
-  // Все інше — одразу в AI:
-  // "аромат з нотою перцю"
-  // "підбери щось з персиком"
-  // "гарна дівчинка"
-  // "good girl"
-  // "light blue"
   if (tokens.length !== 1) {
     return false;
   }
@@ -607,7 +927,6 @@ function shouldUseDirectNameSearch(text) {
     return false;
   }
 
-  // Не запускаємо direct search для службових слів.
   const blocked = new Set([
     "аромат",
     "аромату",
@@ -650,7 +969,7 @@ function createRelaxedSearchProfile(searchProfile, analysis, userText) {
     analysis?.target_name,
     analysis?.brand,
     ...extractUsefulTokens(userText),
-  ]).slice(0, 30);
+  ]).slice(0, 40);
 
   return {
     ...(searchProfile || {}),
@@ -660,26 +979,26 @@ function createRelaxedSearchProfile(searchProfile, analysis, userText) {
       ...safeArray(analysis?.notes_top),
       ...safeArray(analysis?.notes_heart),
       ...safeArray(analysis?.notes_base),
-    ]).slice(0, 18),
+    ]).slice(0, 24),
 
     notes_prefer: uniqStrings([
       ...safeArray(searchProfile?.notes_prefer),
       ...safeArray(analysis?.notes_top),
       ...safeArray(analysis?.notes_heart),
       ...safeArray(analysis?.notes_base),
-    ]).slice(0, 18),
+    ]).slice(0, 24),
 
     accords: uniqStrings([
       ...safeArray(searchProfile?.accords),
       ...safeArray(analysis?.accords),
       ...safeArray(analysis?.style),
-    ]).slice(0, 18),
+    ]).slice(0, 24),
 
     style_tags: uniqStrings([
       ...safeArray(searchProfile?.style_tags),
       ...safeArray(analysis?.style),
       ...safeArray(analysis?.accords),
-    ]).slice(0, 18),
+    ]).slice(0, 24),
 
     raw_terms: rawTerms,
   };
@@ -694,46 +1013,23 @@ function buildGenderPoolsFromFullDb(text, analysis, searchProfile, options = {})
   const limit = options.limit || SEARCH.LIMIT_CANDIDATES || 100;
   const minScore = options.minScore || 1;
 
-  let allItems = [];
+  const allDbCandidates = runFullDbSearch(searchProfile, limit);
+  let relevant = filterMeaningfulItems(allDbCandidates, minScore);
 
-  if (!requestedGender) {
-    allItems = runFullDbSearch(searchProfile, null, limit);
-  } else if (requestedGender === "female") {
-    allItems = runAllowedGenderSimilaritySearch(
-      searchProfile,
-      ["female", "unisex"],
-      requestedGender,
-      limit,
-    );
-  } else if (requestedGender === "male") {
-    allItems = runAllowedGenderSimilaritySearch(
-      searchProfile,
-      ["male", "unisex"],
-      requestedGender,
-      limit,
-    );
-  } else if (requestedGender === "unisex") {
-    allItems = runAllowedGenderSimilaritySearch(
-      searchProfile,
-      ["unisex"],
-      requestedGender,
-      limit,
-    );
-  } else {
-    allItems = runFullDbSearch(searchProfile, null, limit);
+  if (requestedGender) {
+    relevant = filterAllowedGender(relevant, requestedGender);
   }
 
-  allItems = filterAllowedGender(allItems, requestedGender);
-  allItems = sortBySimilarityWithUnisexPriority(
-    filterMeaningfulItems(allItems, minScore),
-    requestedGender,
+  const ordered = buildRandomGenderOrderedList(relevant, requestedGender).slice(
+    0,
+    limit,
   );
 
   return {
     requestedGender,
-    primaryItems: uniqById(allItems),
+    primaryItems: ordered,
     fallbackItems: [],
-    allItems: uniqById(allItems),
+    allItems: ordered,
     usedFallback: false,
   };
 }
@@ -758,16 +1054,10 @@ async function runSearchWithFallbackProfiles({ text, analysis, searchProfile }) 
   });
 
   if (relaxedPools.allItems?.length) {
-    const randomizedItems = randomizeApproximatePool(
-      relaxedPools.allItems,
-      text,
-      APPROX_RANDOM_WINDOW,
-    );
-
     return {
       ...relaxedPools,
-      primaryItems: randomizedItems,
-      allItems: randomizedItems,
+      primaryItems: relaxedPools.allItems,
+      allItems: relaxedPools.allItems,
       searchProfileUsed: relaxedProfile,
       searchMode: "relaxed",
       approximate: true,
@@ -786,16 +1076,10 @@ async function runSearchWithFallbackProfiles({ text, analysis, searchProfile }) 
   });
 
   if (broadPools.allItems?.length) {
-    const randomizedItems = randomizeApproximatePool(
-      broadPools.allItems,
-      text,
-      APPROX_RANDOM_WINDOW,
-    );
-
     return {
       ...broadPools,
-      primaryItems: randomizedItems,
-      allItems: randomizedItems,
+      primaryItems: broadPools.allItems,
+      allItems: broadPools.allItems,
       searchProfileUsed: broadProfile,
       searchMode: "broad",
       approximate: true,
@@ -883,6 +1167,12 @@ async function sendReferenceIntro(ctx, text, analysis) {
     return;
   }
 
+  const knownRef = findKnownReference(text);
+  if (knownRef?.analysis?.user_friendly_reply) {
+    await ctx.reply(knownRef.analysis.user_friendly_reply);
+    return;
+  }
+
   if (!isSpecificReferencePerfume(analysis)) {
     const genericName = analysis?.brand || analysis?.target_name || "цей аромат";
 
@@ -953,35 +1243,30 @@ async function enrichAndRankItems({
     allItems,
     {
       ...(searchProfile || {}),
-      // Для чесного rerank стать не має давати бонус.
       gender: "unknown",
     },
     analysis?.target_name,
-    25,
+    60,
   );
 
-  allItems = sortBySimilarityWithUnisexPriority(allItems, requestedGender);
+  allItems = buildRandomGenderOrderedList(allItems, requestedGender);
 
-  if (approximate) {
-    allItems = randomizeApproximatePool(allItems, text, 18);
-  }
-
-  // Для approximate fallback не даємо GPT повністю переставляти список,
-  // щоб не повертатися до одного й того самого першого аромату.
-  if (!approximate) {
+  // GPT-реранк тільки для точних запитів.
+  // Для approximate і загальних запитів не даємо GPT знову поставити один і той самий товар першим.
+  if (!approximate && requestedGender) {
     try {
       const gptSelected = await rerankAndExplain({
         userText: text,
         analysis,
         searchProfile,
-        candidates: allItems.slice(0, 6),
+        candidates: allItems.slice(0, 8),
         topK: Math.min(6, allItems.length),
       });
 
       if (Array.isArray(gptSelected) && gptSelected.length) {
         allItems = mergeGptReasons(allItems, gptSelected);
         allItems = reorderWithGptPriority(allItems, gptSelected);
-        allItems = sortBySimilarityWithUnisexPriority(allItems, requestedGender);
+        allItems = buildRandomGenderOrderedList(allItems, requestedGender);
       }
     } catch (e) {
       console.error("rerankAndExplain error:", e?.message || e);
@@ -1076,23 +1361,7 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
     return true;
   }
 
-  const remainingPrimary = primaryItems.filter((x) => !sentIds.includes(x.id));
-  const remainingFallback = fallbackItems.filter((x) => !sentIds.includes(x.id));
-
-  let sourceLabel = "ще варіанти";
-  let remaining = [];
-
-  if (remainingPrimary.length) {
-    remaining = remainingPrimary;
-  } else if (!primaryItems.length && remainingFallback.length) {
-    remaining = remainingFallback;
-
-    if (saved.requestedGender === "female") {
-      sourceLabel = "ще варіанти унісекс, бо жіночих не знайшлося";
-    } else if (saved.requestedGender === "male") {
-      sourceLabel = "ще варіанти унісекс, бо чоловічих не знайшлося";
-    }
-  }
+  const remaining = orderedItems.filter((x) => !sentIds.includes(x.id));
 
   if (!remaining.length) {
     await ctx.reply("✅ Це були всі варіанти за попереднім запитом.");
@@ -1100,11 +1369,10 @@ async function sendNextBatchFromState(ctx, saved, text = "") {
     return true;
   }
 
-  const safeRemaining = remaining.filter((x) => !sentIds.includes(x.id));
-  const batch = safeRemaining.slice(0, batchSize);
+  const batch = remaining.slice(0, batchSize);
 
   await ctx.reply(
-    `🔎 Показую ${Math.min(batchSize, safeRemaining.length)} ${sourceLabel}:`,
+    `🔎 Показую ${Math.min(batchSize, remaining.length)} ще варіанти:`,
   );
 
   const { sent, failed } = await sendItemsBatch(ctx, batch);
@@ -1236,18 +1504,7 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    console.log("[PERFUME FLOW] before code search", {
-      text,
-      ms: Date.now() - startedAt,
-    });
-
     const handledCode = await sendCodeMatches(ctx, text);
-
-    console.log("[PERFUME FLOW] after code search", {
-      text,
-      ms: Date.now() - startedAt,
-      handledCode,
-    });
 
     if (handledCode) {
       await updateProgressMessage(
@@ -1271,6 +1528,8 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
+    const knownRef = findKnownReference(text);
+
     let directMatches = [];
     const useDirectSearch = shouldUseDirectNameSearch(text);
 
@@ -1278,39 +1537,15 @@ async function onUserText(ctx) {
       text,
       ms: Date.now() - startedAt,
       useDirectSearch,
+      knownReference: knownRef?.key || null,
       usefulTokens: extractUsefulTokens(text),
     });
 
     if (useDirectSearch) {
-      console.log("[PERFUME FLOW] before directNameKeywordSearch", {
-        text,
-        ms: Date.now() - startedAt,
-      });
-
       directMatches = searchByNameAndKeywords(text, {
         limit: SEARCH.LIMIT_CANDIDATES || 100,
         minScore: 1200,
         scanLimit: 1200,
-      });
-
-      console.log("[PERFUME FLOW] after directNameKeywordSearch", {
-        text,
-        ms: Date.now() - startedAt,
-        count: directMatches.length,
-        strong: hasStrongDirectMatch(directMatches),
-        first: directMatches.slice(0, 5).map((x) => ({
-          id: x.id,
-          name: x.name,
-          score: x.match_score,
-          type: x.direct_match_type,
-          field: x.direct_match_field,
-        })),
-      });
-    } else {
-      console.log("[PERFUME FLOW] directNameKeywordSearch skipped", {
-        text,
-        ms: Date.now() - startedAt,
-        reason: "semantic_or_long_query",
       });
     }
 
@@ -1367,12 +1602,6 @@ async function onUserText(ctx) {
         await ctx.reply("✅ Це всі знайдені варіанти за цим запитом.");
       }
 
-      console.log("[PERFUME FLOW] completed by direct search", {
-        text,
-        ms: Date.now() - startedAt,
-        total: directMatches.length,
-      });
-
       return true;
     }
 
@@ -1388,20 +1617,7 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    console.log("[PERFUME FLOW] before exact name search", {
-      text,
-      ms: Date.now() - startedAt,
-    });
-
-    const exactByName = findByExactName(text);
-
-    console.log("[PERFUME FLOW] after exact name search", {
-      text,
-      ms: Date.now() - startedAt,
-      found: Boolean(exactByName),
-      id: exactByName?.id || null,
-      name: exactByName?.name || null,
-    });
+    const exactByName = knownRef ? null : findByExactName(text);
 
     if (exactByName) {
       clearLastSearch(ctx);
@@ -1431,12 +1647,15 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    console.log("[PERFUME FLOW] before analyzePerfumeIntent", {
-      text,
-      ms: Date.now() - startedAt,
-    });
+    if (knownRef) {
+      analysis = mergeKnownReferenceAnalysis({}, knownRef);
+    } else {
+      analysis = await analyzePerfumeIntent(text);
+    }
 
-    analysis = await analyzePerfumeIntent(text);
+    if (knownRef) {
+      analysis = mergeKnownReferenceAnalysis(analysis, knownRef);
+    }
 
     console.log("[PERFUME FLOW] after analyzePerfumeIntent", {
       text,
@@ -1445,6 +1664,7 @@ async function onUserText(ctx) {
       target_name: analysis?.target_name,
       brand: analysis?.brand,
       gender: analysis?.gender,
+      knownReference: knownRef?.key || null,
       search_terms: analysis?.search_terms,
       notes_top: analysis?.notes_top,
       notes_heart: analysis?.notes_heart,
@@ -1467,12 +1687,15 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    console.log("[PERFUME FLOW] before buildSearchProfile", {
-      text,
-      ms: Date.now() - startedAt,
-    });
+    if (knownRef) {
+      searchProfile = mergeKnownReferenceProfile({}, knownRef);
+    } else {
+      searchProfile = await buildSearchProfile(analysis);
+    }
 
-    searchProfile = await buildSearchProfile(analysis);
+    if (knownRef) {
+      searchProfile = mergeKnownReferenceProfile(searchProfile, knownRef);
+    }
 
     console.log("[PERFUME FLOW] after buildSearchProfile", {
       text,
@@ -1499,11 +1722,6 @@ async function onUserText(ctx) {
         "6/7 Шукаю кандидатів у базі",
       ].join("\n"),
     );
-
-    console.log("[PERFUME FLOW] before runSearchWithFallbackProfiles", {
-      text,
-      ms: Date.now() - startedAt,
-    });
 
     searchResult = await runSearchWithFallbackProfiles({
       text,
@@ -1572,12 +1790,6 @@ async function onUserText(ctx) {
       ].join("\n"),
     );
 
-    console.log("[PERFUME FLOW] before enrichAndRankItems", {
-      text,
-      ms: Date.now() - startedAt,
-      count: searchResult?.allItems?.length || 0,
-    });
-
     allItems = await enrichAndRankItems({
       items: searchResult.allItems,
       text,
@@ -1620,10 +1832,20 @@ async function onUserText(ctx) {
       `✅ AI-підбір завершено за ${formatMs(Date.now() - startedAt)}`,
     );
 
-    if (searchResult.approximate) {
-      await ctx.reply("✨ Підібрав 3 приблизно схожі варіанти з бази:");
+    if (searchResult.requestedGender === "male") {
+      await ctx.reply("✨ Підібрав 3 чоловічі / унісекс варіанти з бази:");
+    } else if (searchResult.requestedGender === "female") {
+      await ctx.reply("✨ Підібрав 3 жіночі / унісекс варіанти з бази:");
+    } else if (searchResult.requestedGender === "unisex") {
+      await ctx.reply("✨ Підібрав 3 унісекс варіанти з бази:");
+    } else if (searchResult.approximate) {
+      await ctx.reply(
+        "✨ Підібрав 3 приблизно схожі варіанти з бази: спочатку унісекс, потім жіночі, потім чоловічі.",
+      );
     } else {
-      await ctx.reply("✨ Підібрав 3 найбільш схожі варіанти:");
+      await ctx.reply(
+        "✨ Підібрав 3 найбільш схожі варіанти: спочатку унісекс, потім жіночі, потім чоловічі.",
+      );
     }
 
     const { sent, failed } = await sendItemsBatch(ctx, firstBatch);
@@ -1664,6 +1886,7 @@ async function onUserText(ctx) {
       ms: Date.now() - startedAt,
       sent: sentIds.length,
       left,
+      requestedGender: searchResult.requestedGender,
       searchMode: searchResult.searchMode,
       approximate: searchResult.approximate,
     });

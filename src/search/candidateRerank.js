@@ -47,28 +47,32 @@ function getGenderBucket(requestedGender, itemGender) {
   const req = normalizeGenderValue(requestedGender);
   const item = normalizeGenderValue(itemGender);
 
-  // ВАЖЛИВО:
-  // Якщо користувач просить female або male,
-  // ми все одно дозволяємо female+unisex / male+unisex.
-  // Але якщо схожість однакова — unisex показуємо вище.
+  // Якщо стать явно задана:
+  // female -> unisex + female, але male йде в заборонений бакет
+  // male   -> unisex + male, але female йде в заборонений бакет
   if (req === "female") {
     if (item === "unisex") return 0;
     if (item === "female") return 1;
-    return 2;
+    return 99;
   }
 
   if (req === "male") {
     if (item === "unisex") return 0;
     if (item === "male") return 1;
-    return 2;
+    return 99;
   }
 
   if (req === "unisex") {
     if (item === "unisex") return 0;
-    return 1;
+    return 99;
   }
 
-  return 0;
+  // Якщо стать НЕ задана:
+  // спочатку unisex, потім female, потім male, потім unknown.
+  if (item === "unisex") return 0;
+  if (item === "female") return 1;
+  if (item === "male") return 2;
+  return 3;
 }
 
 function rerankTopK(candidates, profile, targetName = "", topK = 3, offset = 0) {
@@ -84,11 +88,19 @@ function rerankTopK(candidates, profile, targetName = "", topK = 3, offset = 0) 
     const itemName = norm(item.name || "");
     if (baseName && itemName && itemName === baseName) continue;
 
+    const genderBucket = getGenderBucket(requestedGender, item.gender);
+
+    // Якщо стать явно задана — чужу стать не пускаємо в топ.
+    const req = normalizeGenderValue(requestedGender);
+    if ((req === "male" || req === "female" || req === "unisex") && genderBucket >= 99) {
+      continue;
+    }
+
     seen.add(key);
 
     filtered.push({
       ...item,
-      _gender_bucket: getGenderBucket(requestedGender, item.gender),
+      _gender_bucket: genderBucket,
     });
   }
 
@@ -96,18 +108,26 @@ function rerankTopK(candidates, profile, targetName = "", topK = 3, offset = 0) 
     const aScore = Number(a.match_score || 0);
     const bScore = Number(b.match_score || 0);
 
-    // ГОЛОВНИЙ ПРІОРИТЕТ — схожість аромату:
-    // ноти, акорди, опис, keywords, стиль.
+    // Якщо стать не задана — головне правило:
+    // 1) unisex
+    // 2) female
+    // 3) male
+    // всередині кожної групи — за score.
+    const req = normalizeGenderValue(requestedGender);
+    if (req === "unknown" && a._gender_bucket !== b._gender_bucket) {
+      return a._gender_bucket - b._gender_bucket;
+    }
+
+    // Якщо стать задана — спочатку score, стать тільки тайбрейкер.
     if (aScore !== bScore) {
       return bScore - aScore;
     }
 
-    // Стать — тільки тайбрейкер, якщо схожість однакова.
-    // Тобто якщо unisex має кращий match_score, він буде вище жіночого/чоловічого.
     if (a._gender_bucket !== b._gender_bucket) {
       return a._gender_bucket - b._gender_bucket;
     }
 
+    // Рандомність НЕ тут. Тут стабільний fallback.
     return Number(a.id || 0) - Number(b.id || 0);
   });
 
