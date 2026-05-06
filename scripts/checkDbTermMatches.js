@@ -1,37 +1,28 @@
 require("dotenv").config();
 const { getAllPerfumes } = require("../src/search/catalogRepo");
+const { norm, containsPhrase } = require("../src/search/queryNormalizer");
 
 const terms = process.argv.slice(2);
 if (!terms.length) {
-  terms.push("кавун", "watermelon", "арбуз", "gaba", "габа");
+  console.error("Usage: node scripts/checkDbTermMatches.js кавун жасмин амбра ...");
+  process.exit(1);
 }
 
-function norm(value) {
-  return String(value || "").toLowerCase().replace(/[ʼ’‘`´']/g, " ").replace(/\s+/g, " ").trim();
-}
-
-const rows = getAllPerfumes(2000);
+const rows = getAllPerfumes(5000);
 for (const term of terms) {
-  const t = norm(term);
-  const found = rows.filter((row) => norm([
-    row.id,
-    row.number_code,
-    row.name,
-    row.version,
-    row.keywords,
-    row.notes,
-    row.description,
-  ].join(" | ")).includes(t));
-
+  const hits = rows.filter((row) => {
+    const text = norm([row.name, row.version, row.keywords, row.notes, row.description].filter(Boolean).join(" | "));
+    return containsPhrase(text, term);
+  });
   console.log("\n==============================");
-  console.log(`TERM: ${term}`);
-  console.log(`COUNT: ${found.length}`);
-  console.table(found.map((x) => ({
+  console.log("TERM:", term);
+  console.log("COUNT:", hits.length);
+  console.table(hits.slice(0, 50).map((x) => ({
     id: x.id,
     code: x.number_code,
     gender: x.gender,
     name: x.name,
     version: String(x.version || "").slice(0, 80),
-    notes: String(x.notes || "").slice(0, 120),
+    notes: String(x.notes || "").slice(0, 130),
   })));
 }
