@@ -915,19 +915,13 @@ function shouldUseDirectNameSearch(text) {
 
   if (findKnownReference(t)) return false;
 
-  // Не передаємо у direct-search слова статі/наміру як частину назви.
-  // Приклад: "чоловічі том форд" -> "tom ford".
-  let cleaned = t;
-  try {
-    cleaned = require("../search/directNameKeywordSearch").cleanDirectQuery(t) || t;
-  } catch {}
+  const tokens = extractUsefulTokens(t);
 
-  const tokens = extractUsefulTokens(cleaned);
   if (!tokens.length) return false;
 
-  // Direct-пошук тільки для коротких name/brand запитів.
-  // Нотні/стильові запити типу "солодкий ванільний" підуть далі в AI/profile.
-  if (tokens.length >= 1 && tokens.length <= 6) {
+  // Запити типу "том форд", "пако рабан", "пако карабан", "гуд герл"
+  // мають йти в прямий пошук по назві/бренду до AI.
+  if (tokens.length >= 1 && tokens.length <= 5) {
     const blocked = new Set([
       "аромат",
       "аромату",
@@ -956,13 +950,6 @@ function shouldUseDirectNameSearch(text) {
       "деревний",
       "квітковий",
       "фруктовий",
-      "жіночі",
-      "жіночий",
-      "чоловічі",
-      "чоловічий",
-      "унісекс",
-      "женские",
-      "мужские",
     ]);
 
     const hasBlockedOnly = tokens.every((token) => blocked.has(norm(token)));
