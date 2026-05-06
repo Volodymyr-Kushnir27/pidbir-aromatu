@@ -917,40 +917,48 @@ function shouldUseDirectNameSearch(text) {
 
   const tokens = extractUsefulTokens(t);
 
-  if (tokens.length !== 1) {
-    return false;
+  if (!tokens.length) return false;
+
+  // Запити типу "том форд", "пако рабан", "пако карабан", "гуд герл"
+  // мають йти в прямий пошук по назві/бренду до AI.
+  if (tokens.length >= 1 && tokens.length <= 5) {
+    const blocked = new Set([
+      "аромат",
+      "аромату",
+      "парфум",
+      "парфуми",
+      "духи",
+      "нотою",
+      "нота",
+      "ноти",
+      "нотами",
+      "схожий",
+      "схожа",
+      "схоже",
+      "підбери",
+      "знайди",
+      "хочу",
+      "треба",
+      "солодкий",
+      "свіжий",
+      "цитрус",
+      "ваніль",
+      "мускус",
+      "шкіра",
+      "тютюн",
+      "табак",
+      "деревний",
+      "квітковий",
+      "фруктовий",
+    ]);
+
+    const hasBlockedOnly = tokens.every((token) => blocked.has(norm(token)));
+    if (hasBlockedOnly) return false;
+
+    return true;
   }
 
-  const token = tokens[0];
-
-  if (token.length > 10) {
-    return false;
-  }
-
-  const blocked = new Set([
-    "аромат",
-    "аромату",
-    "парфум",
-    "парфуми",
-    "духи",
-    "нотою",
-    "нота",
-    "ноти",
-    "нотами",
-    "схожий",
-    "схожа",
-    "схоже",
-    "підбери",
-    "знайди",
-    "хочу",
-    "треба",
-  ]);
-
-  if (blocked.has(token)) {
-    return false;
-  }
-
-  return true;
+  return false;
 }
 
 function createRelaxedSearchProfile(searchProfile, analysis, userText) {

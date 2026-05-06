@@ -1,7 +1,11 @@
 const OpenAI = require("openai");
 const { OPENAI_API_KEY, CHAT_MODEL } = require("../config");
 
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: OPENAI_API_KEY,
+  timeout: Number(process.env.OPENAI_TIMEOUT_MS || 20000),
+  maxRetries: Number(process.env.OPENAI_MAX_RETRIES || 1),
+});
 
 function safeJsonParse(content) {
   const raw = String(content || "").trim();
