@@ -1,49 +1,28 @@
 require("dotenv").config();
-
 const { findExactNoteMatches } = require("../src/search/exactNoteSearch");
-const { findCandidates } = require("../src/search/candidateSearch");
 
-const cases = [
-  { text: "підбери аромат кавуну", gender: null },
-  { text: "жіночий аромат кавуну", gender: "female" },
-  { text: "унісекс аромат кавуну", gender: "unisex" },
-  { text: "лимон ваніль бісквіт", gender: "female" },
+const queries = [
+  "Аромат з кавуном",
+  "підбери аромат кавуну",
+  "з нотою кавуна",
+  "аромат watermelon",
+  "персик",
+  "аромат з персиком",
 ];
 
-for (const c of cases) {
+for (const query of queries) {
+  const t0 = Date.now();
+  const rows = findExactNoteMatches(query, { limit: 30 });
   console.log("\n==============================");
-  console.log("EXACT NOTE:", c.text, "gender:", c.gender || "-");
-  const rows = findExactNoteMatches(c.text, { gender: c.gender, limit: 30 });
-  console.log("count:", rows.length);
+  console.log(`QUERY: ${query}`);
+  console.log(`TIME: ${Date.now() - t0} ms`);
+  console.log(`COUNT: ${rows.length}`);
   console.table(rows.map((x) => ({
     id: x.id,
     code: x.number_code,
-    name: x.name,
     gender: x.gender,
+    field: x.direct_match_field,
     score: x.match_score,
-    why: (x.why_selected || []).join("; "),
+    name: x.name,
   })));
 }
-
-const profile = {
-  gender: "unknown",
-  notes_include: ["кавун"],
-  notes_prefer: ["кавун"],
-  raw_terms: ["кавун", "фруктовий", "літній"],
-  accords: ["фруктовий", "свіжий", "літній"],
-  style_tags: ["фруктовий", "свіжий", "літній"],
-};
-
-console.log("\n==============================");
-console.log("CANDIDATES PROFILE: кавун");
-const candidates = findCandidates(profile, 30);
-console.log("count:", candidates.length);
-console.table(candidates.map((x) => ({
-  id: x.id,
-  code: x.number_code,
-  name: x.name,
-  gender: x.gender,
-  score: x.match_score,
-  exact: x._debug?.matched_exact_notes?.join(", "),
-  fallback: x._debug?.matched_note_fallbacks?.join(", "),
-})));

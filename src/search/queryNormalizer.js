@@ -19,19 +19,20 @@ const NOTE_REQUEST_WORDS = new Set([
   "нота", "нотою", "ноти", "нотами", "note", "notes",
   "аромат", "аромату", "парфум", "парфуми", "духи",
   "підбери", "подбери", "знайди", "найди", "покажи", "хочу", "треба", "мені", "мне",
+  "з", "із", "с", "with",
 ]);
 
 const EXACT_NOTE_GROUPS = {
   watermelon: {
-    exact: ["кавун", "кавуна", "кавуновий", "арбуз", "арбуза", "арбузный", "watermelon", "water melon"],
+    exact: ["кавун", "кавуна", "кавуном", "кавуновий", "арбуз", "арбуза", "арбузом", "арбузный", "watermelon", "water melon"],
     fallback: ["диня", "дыня", "melon", "fruity", "фруктовий", "фруктовый", "літній", "летний", "fresh", "свіжий", "свежий"],
   },
   lemon: {
-    exact: ["лимон", "лимона", "лимонний", "lemon", "citron"],
+    exact: ["лимон", "лимона", "лимоном", "лимонний", "lemon", "citron"],
     fallback: ["цитрус", "цитруси", "citrus", "bergamot", "бергамот", "fresh", "свіжий"],
   },
   vanilla: {
-    exact: ["ваніль", "ванили", "ваниль", "ванільний", "vanilla"],
+    exact: ["ваніль", "ванілі", "ваниль", "ванили", "ванільний", "ванильный", "vanilla"],
     fallback: ["sweet", "солодкий", "сладкий", "gourmand", "гурманський", "cream", "крем"],
   },
   cherry: {
@@ -39,11 +40,11 @@ const EXACT_NOTE_GROUPS = {
     fallback: ["berry", "ягідний", "ягодный", "fruity", "фруктовий"],
   },
   peach: {
-    exact: ["персик", "персика", "персиковий", "peach"],
+    exact: ["персик", "персика", "персиком", "персиковий", "peach"],
     fallback: ["fruity", "фруктовий", "солодкий", "sweet", "juicy"],
   },
   coffee: {
-    exact: ["кава", "кави", "кавовий", "кофе", "coffee", "espresso"],
+    exact: ["кава", "кави", "кавою", "кавовий", "кофе", "coffee", "espresso"],
     fallback: ["gourmand", "гурманський", "sweet", "солодкий", "warm", "теплий"],
   },
   tobacco: {
@@ -64,24 +65,6 @@ const EXACT_NOTE_GROUPS = {
   },
 };
 
-function parseLocalQuery(userText) {
-  const raw = String(userText || "").trim();
-  const gender = detectGenderFromQuery(raw);
-  const cleanQuery = cleanDirectQuery(raw);
-  const aliasedQuery = applyCommonAliases(cleanQuery);
-
-  return {
-    raw,
-    normalizedRaw: norm(raw),
-    gender,
-    cleanQuery,
-    aliasedQuery,
-    isProbablyDirectName: Boolean(cleanQuery && cleanQuery.split(/\s+/).length <= 6),
-    explicitNotes: getExplicitRequestedNotes(raw),
-    isExplicitNoteQuery: isExplicitNoteQuery(raw),
-  };
-}
-
 function tokensOf(value) {
   return norm(value)
     .replace(/[ʼ’‘`´']/g, " ")
@@ -90,10 +73,18 @@ function tokensOf(value) {
     .filter(Boolean);
 }
 
+function normalizePhrase(value) {
+  return ` ${norm(value)
+    .replace(/[ʼ’‘`´']/g, " ")
+    .replace(/[^a-zа-яіїє0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()} `;
+}
+
 function containsPhrase(haystack, phrase) {
-  const h = ` ${norm(haystack).replace(/[ʼ’‘`´']/g, " ")} `;
-  const p = ` ${norm(phrase).replace(/[ʼ’‘`´']/g, " ")} `;
-  return h.includes(p);
+  const h = normalizePhrase(haystack);
+  const p = normalizePhrase(phrase).trim();
+  return Boolean(p && h.includes(` ${p} `));
 }
 
 function getExplicitRequestedNotes(text) {
@@ -116,7 +107,7 @@ function isExplicitNoteQuery(text) {
   const hasRequestWord = tokens.some((token) => NOTE_REQUEST_WORDS.has(token));
 
   // "підбери аромат кавуну" = note search.
-  // "Zara Cherry Watermelon Ice" = direct name/reference, not pure note search.
+  // "Zara Cherry Watermelon Ice" = direct name/reference.
   return hasRequestWord || tokens.length <= 4;
 }
 
@@ -126,6 +117,24 @@ function getExactNoteTerms(canonicalNote) {
 
 function getFallbackNoteTerms(canonicalNote) {
   return EXACT_NOTE_GROUPS[canonicalNote]?.fallback || [];
+}
+
+function parseLocalQuery(userText) {
+  const raw = String(userText || "").trim();
+  const gender = detectGenderFromQuery(raw);
+  const cleanQuery = cleanDirectQuery(raw);
+  const aliasedQuery = applyCommonAliases(cleanQuery);
+
+  return {
+    raw,
+    normalizedRaw: norm(raw),
+    gender,
+    cleanQuery,
+    aliasedQuery,
+    isProbablyDirectName: Boolean(cleanQuery && cleanQuery.split(/\s+/).length <= 6),
+    explicitNotes: getExplicitRequestedNotes(raw),
+    isExplicitNoteQuery: isExplicitNoteQuery(raw),
+  };
 }
 
 module.exports = {

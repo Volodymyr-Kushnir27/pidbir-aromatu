@@ -1854,11 +1854,11 @@ async function onUserText(ctx) {
     );
 
     if (searchResult.requestedGender === "male") {
-      await ctx.reply("✨ Підібрав 3 чоловічі / унісекс варіанти з бази:");
+      await ctx.reply("✨ Підібрав чоловічі / унісекс варіанти з бази:");
     } else if (searchResult.requestedGender === "female") {
-      await ctx.reply("✨ Підібрав 3 жіночі / унісекс варіанти з бази:");
+      await ctx.reply("✨ Підібрав жіночі / унісекс варіанти з бази:");
     } else if (searchResult.requestedGender === "unisex") {
-      await ctx.reply("✨ Підібрав 3 унісекс варіанти з бази:");
+      await ctx.reply("✨ Підібрав унісекс варіанти з бази:");
     } else if (searchResult.approximate) {
       await ctx.reply(
         "✨ Підібрав 3 приблизно схожі варіанти з бази: спочатку унісекс, потім жіночі, потім чоловічі.",
