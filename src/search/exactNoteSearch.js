@@ -21,6 +21,29 @@ function matchedTerms(text, terms = []) {
   return [...new Set((terms || []).filter((term) => containsTerm(text, term)))];
 }
 
+
+// AUX_STYLE_TERMS_FOR_NOTE_SEARCH
+// Стильові слова використовуються тільки як бонус після точного збігу ноти.
+// Вони не можуть витісняти ноту і не повинні запускати direct-search.
+const AUX_STYLE_GROUPS = {
+  trail: ["шлейфовий", "шлейфова", "шлейфове", "шлейфові", "шлейф", "sillage", "projection", "trail"],
+  sweet: ["солодкий", "солодка", "солодке", "солодкі", "сладкий", "sweet", "gourmand"],
+  fresh: ["свіжий", "свіжа", "свіже", "свіжі", "свежий", "fresh", "clean"],
+  spicy: ["пряний", "пряна", "пряне", "пряні", "spicy", "warm spicy"],
+  woody: ["деревний", "деревна", "деревне", "woody", "wood"],
+  floral: ["квітковий", "квіткова", "квіткове", "цветочный", "floral"],
+};
+
+function getAuxStyleTerms(rawText) {
+  const text = norm(rawText || "");
+  const out = [];
+  for (const terms of Object.values(AUX_STYLE_GROUPS)) {
+    const matched = terms.some((term) => containsTerm(text, term));
+    if (matched) out.push(...terms);
+  }
+  return [...new Set(out)];
+}
+
 function genderAllowed(rowGender, requestedGender) {
   const req = normalizeGenderValue(requestedGender);
   const item = normalizeGenderValue(rowGender);

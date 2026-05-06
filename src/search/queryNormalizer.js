@@ -74,22 +74,67 @@ function cleanDirectQuery(value) {
   return norm(tokens.join(" "));
 }
 
+
+// FLEXIBLE_NOTE_FORM_MATCH
+// Дає змогу ловити відмінки: "вишнею" -> "вишня", "кавуну" -> "кавун", "жасмином" -> "жасмин".
+function stemNoteToken(token) {
+  let t = norm(token)
+    .replace(/[ʼ’‘`´']/g, " ")
+    .replace(/[^a-zа-яіїє0-9]+/gi, " ")
+    .trim();
+
+  if (!t || t.length <= 3) return t;
+
+  const endings = [
+    "евою", "овою", "євою", "евая", "овая", "євая",
+    "ами", "ями", "ого", "ому", "его", "ему", "ими", "ыми",
+    "ею", "єю", "ою", "ою", "ом", "ем", "ам", "ям", "ах", "ях",
+    "ий", "ій", "ый", "ая", "ое", "ые", "ие",
+    "у", "ю", "а", "я", "і", "и", "е", "о"
+  ];
+
+  for (const ending of endings) {
+    if (t.endsWith(ending) && t.length - ending.length >= 3) {
+      return t.slice(0, -ending.length);
+    }
+  }
+
+  return t;
+}
+
+function containsFlexibleNote(text, phrase) {
+  if (containsPhrase(text, phrase)) return true;
+
+  const textTokens = tokensOf(text).map(stemNoteToken).filter(Boolean);
+  const phraseTokens = tokensOf(phrase).map(stemNoteToken).filter(Boolean);
+  if (!phraseTokens.length) return false;
+
+  // Однослівна нота: "вишнею" має збігатися з "вишня".
+  if (phraseTokens.length === 1) {
+    const p = phraseTokens[0];
+    if (p.length < 3) return false;
+    return textTokens.some((t) => t === p || (p.length >= 5 && (t.startsWith(p) || p.startsWith(t))));
+  }
+
+  // Фразова нота: "рожевим перцем" -> "рожевий перець".
+  return phraseTokens.every((p) =>
+    textTokens.some((t) => t === p || (p.length >= 5 && (t.startsWith(p) || p.startsWith(t))))
+  );
+}
+
 function getExplicitRequestedNotes(text) {
   const t = norm(text);
   const found = [];
-  const entries = Object.entries(NOTE_DICTIONARY).sort((a, b) => {
-    const alen = Math.max(...(a[1].exact || [""]).map((x) => String(x).length));
-    const blen = Math.max(...(b[1].exact || [""]).map((x) => String(x).length));
-    return blen - alen;
-  });
 
-  for (const [canonical, group] of entries) {
-    const matched = (group.exact || []).some((term) => containsPhrase(t, term));
+  for (const [canonical, group] of Object.entries(NOTE_DICTIONARY)) {
+    const exactList = Array.isArray(group?.exact) ? group.exact : [];
+    const matched = exactList.some((term) =>
+      typeof containsFlexibleNote === "function" ? containsFlexibleNote(t, term) : containsPhrase(t, term)
+    );
     if (matched) found.push(canonical);
   }
 
-  // De-duplicate overlapping groups: if exact same canonical was added once only.
-  return unique(found);
+  return [...new Set(found)];
 }
 
 function isExplicitNoteQuery(text) {

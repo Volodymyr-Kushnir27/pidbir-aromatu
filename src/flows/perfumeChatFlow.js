@@ -915,6 +915,20 @@ function shouldUseDirectNameSearch(text) {
 
   if (findKnownReference(t)) return false;
 
+  // NOTE_FIRST_BYPASS_DIRECT_SEARCH
+  // Якщо користувач явно просить ноту (наприклад: "шлейфовий парфум з вишнею",
+  // "аромат з кавуном", "жасмін", "персик"), direct-search по name/version/keywords
+  // не має перехоплювати запит словом типу "шлейфовий". Спочатку шукаємо точну ноту.
+  try {
+    const { parseLocalQuery } = require("../search/queryNormalizer");
+    const localQuery = parseLocalQuery(t);
+    if (localQuery?.isExplicitNoteQuery || (Array.isArray(localQuery?.explicitNotes) && localQuery.explicitNotes.length)) {
+      return false;
+    }
+  } catch (e) {
+    // Якщо normalizer недоступний, не ламаємо flow.
+  }
+
   // Не передаємо у direct-search слова статі/наміру як частину назви.
   // Приклад: "чоловічі том форд" -> "tom ford".
   let cleaned = t;
