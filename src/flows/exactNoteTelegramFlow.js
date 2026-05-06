@@ -1,164 +1,123 @@
 const { findExactNoteMatches } = require('../search/exactNoteSearch');
-const { getAllPerfumes } = require('../search/catalogRepo');
 const { sendPerfumeCard } = require('./sendPerfumeCard');
 
 const exactNoteState = new Map();
+const BATCH_SIZE = 3;
+const MAX_EXACT_NOTE_RESULTS = Number(process.env.EXACT_NOTE_RESULT_LIMIT || process.env.SEARCH_LIMIT_CANDIDATES || 30);
 
-const SEARCH_LIMIT = Math.min(Number(process.env.SEARCH_LIMIT_CANDIDATES || 30) || 30, 30);
-const PAGE_SIZE = Math.max(1, Number(process.env.SEARCH_TOP_K || 3) || 3);
+function getTgId(ctx) {
+  return ctx.from?.id;
+}
 
 function norm(value) {
   return String(value || '')
     .toLowerCase()
     .replace(/ё/g, 'е')
-    .replace(/[ʼ’`´]/g, "'")
+    .replace(/[ʼ’‘`]/g, "'")
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-function normalizeGenderValue(value) {
-  const t = norm(value);
-  if (!t) return 'unknown';
-  if (/унісекс|унисекс|unisex|ніша,\s*унісекс/.test(t)) return 'unisex';
-  if (/жіноч|жноч|женск|female|woman|women/.test(t)) return 'female';
-  if (/чолов|мужск|male|man|men/.test(t)) return 'male';
-  return 'unknown';
+function tokenize(text) {
+  return norm(text)
+    .replace(/["“”«»()[\]{}.,;:!?/\\|+=*_~№#@$%^&-]+/g, ' ')
+    .split(/\s+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
 }
 
-function detectGenderFromText(text) {
+function isMoreRequest(text) {
   const t = norm(text);
-  if (/\b(унісекс|унісексові|унисекс|unisex|для всіх|для всех)\b/i.test(t)) return 'unisex';
-  if (/\b(жіночі|жіночий|жіноче|для жінки|для жінок|для дівчини|дівочі|женские|женский|для женщины|для женщин|female|woman|women)\b/i.test(t)) return 'female';
-  if (/\b(чоловічі|чоловічий|чоловіче|для чоловіка|для чоловіків|для хлопця|мужские|мужской|для мужчины|для мужчин|male|man|men)\b/i.test(t)) return 'male';
+  return /^(ще|ещё|еще|дай ще|дай ще 3|покажи ще|ще 3|more)$/i.test(t);
+}
+
+function hasNoteIntent(text) {
+  const t = norm(text);
+
+  if (/\b(нота|нотою|нотой|нотой|ноти|нотами|notes?|запах|запахом|аромат з|парфум з|парфуми з|духи з|духи с|парфюм с|аромат с)\b/i.test(t)) {
+    return true;
+  }
+
+  // Фрази типу "шлейфовий з вишнею", "солодкий з полуницею".
+  if (/\bз\s+[а-яіїєґ'’ʼa-z]{3,}\b/i.test(t) || /\bс\s+[а-яіїєґ'’ʼa-z]{3,}\b/i.test(t)) {
+    return true;
+  }
+
+  return false;
+}
+
+function looksLikeShortNoteQuery(text) {
+  const tokens = tokenize(text).filter((x) => !['аромат', 'парфум', 'парфуми', 'духи', 'підбери', 'знайди', 'давай', 'мені', 'хочу'].includes(x));
+  return tokens.length >= 1 && tokens.length <= 3;
+}
+
+function hasBrandLikeWords(text) {
+  const t = norm(text);
+  return /\b(tom|ford|том|форд|paco|rabanne|пако|рабан|creed|крид|chanel|шанель|versace|версаче|escada|ескада|zara|dolce|gabbana|габана|dior|діор|armani|армані|ysl|laurent|montale|монталь|kilian|кіліан|byredo|байредо|mancera|мансера|hugo|boss|hormone|gaba)\b/i.test(t);
+}
+
+function shouldTryExactNote(text) {
+  const t = norm(text);
+  if (!t || t.startsWith('/')) return false;
+  if (isMoreRequest(t)) return true;
+
+  // Не перехоплюємо очевидний пошук бренду/назви без нотного наміру.
+  if (hasBrandLikeWords(t) && !hasNoteIntent(t)) return false;
+
+  return hasNoteIntent(t) || looksLikeShortNoteQuery(t);
+}
+
+function getRequestedGender(text) {
+  const t = norm(text);
+  if (/\b(унісекс|унисекс|unisex|для всіх|для всех)\b/i.test(t)) return 'unisex';
+  if (/\b(жіночі|жіночий|жіноче|жінки|жінок|дівчини|женские|женский|женщины|женщин|female|women|woman)\b/i.test(t)) return 'female';
+  if (/\b(чоловічі|чоловічий|чоловіче|чоловіка|чоловіків|мужские|мужской|мужчины|мужчин|male|men|man)\b/i.test(t)) return 'male';
   return null;
 }
 
-function genderAllowed(rowGender, requestedGender) {
-  const req = normalizeGenderValue(requestedGender);
-  const item = normalizeGenderValue(rowGender);
-  if (!req || req === 'unknown') return true;
-  if (req === 'female') return item === 'female' || item === 'unisex';
-  if (req === 'male') return item === 'male' || item === 'unisex';
-  if (req === 'unisex') return item === 'unisex';
-  return true;
+function buildExactNotePayload(item) {
+  const why = Array.isArray(item.why_selected) ? item.why_selected : [];
+  const hasExactWhy = why.some((x) => String(x || '').toLowerCase().includes('точний збіг'));
+
+  return {
+    ...item,
+    why_selected: hasExactWhy ? why : [`точний збіг ноти у полі "Ноти"`],
+  };
 }
 
-function isMoreText(text) {
-  const t = norm(text);
-  return /^(ще|еще|more|дай ще|дай еще|дай ще 3|дай еще 3)$/i.test(t);
-}
-
-function getTgId(ctx) {
-  return Number(ctx?.from?.id || 0);
-}
-
-function uniqById(items) {
-  const seen = new Set();
-  const out = [];
-  for (const item of items || []) {
-    const id = Number(item?.id || 0);
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    out.push(item);
-  }
-  return out;
-}
-
-function wordBoundaryContains(text, term) {
-  const t = norm(text).replace(/[^a-zа-яіїєґ0-9'\s]+/giu, ' ');
-  const needle = norm(term).replace(/[^a-zа-яіїєґ0-9'\s]+/giu, ' ').trim();
-  if (!needle) return false;
-  const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-  return new RegExp('(^|[^a-zа-яіїєґ0-9])' + esc + '($|[^a-zа-яіїєґ0-9])', 'iu').test(t);
-}
-
-const ALIAS_GROUPS = [
-  ['кавун', 'кавуна', 'кавуну', 'кавуном', 'арбуз', 'арбуза', 'арбузу', 'watermelon', 'water melon'],
-  ['диня', 'дині', 'диню', 'динею', 'дыня', 'дыни', 'дыню', 'melon'],
-  ['імбир', 'імбиру', 'імбиром', 'імбирь', 'имбир', 'имбирь', 'ginger'],
-  ['полуниця', 'полуниці', 'полуницю', 'полуницею', 'клубника', 'клубники', 'клубнику', 'strawberry'],
-  ['маракуя', 'маракуї', 'маракую', 'маракуєю', 'passion fruit', 'passionfruit'],
-  ['базилік', 'базиліку', 'базиліком', 'базилик', 'базилика', 'basil'],
-  ['слива', 'сливи', 'сливу', 'сливою', 'plum'],
-  ['мед', 'меду', 'медом', 'медовий', 'honey'],
-  ['фіалка', 'фіалки', 'фіалку', 'фіалкою', 'фиалка', 'violet'],
-  ['мята', "м'ята", 'мʼята', 'м’ята', 'мяти', "м'яти", 'мятою', "м'ятою", 'mint'],
-  ['вишня', 'вишні', 'вишню', 'вишнею', 'черешня', 'cherry'],
-  ['ром', 'рому', 'ромом', 'rum'],
-  ['віскі', 'виски', 'whisky', 'whiskey', 'bourbon', 'scotch'],
-];
-
-const STOP_WORDS = new Set([
-  'аромат', 'аромату', 'аромати', 'парфум', 'парфуми', 'духи', 'нота', 'ноти', 'нотою', 'нотами',
-  'з', 'із', 'с', 'со', 'та', 'і', 'й', 'або', 'чи', 'для', 'мені', 'підбери', 'знайди', 'дай',
-  'шлейфовий', 'стійкий', 'свіжий', 'солодкий', 'жіночий', 'жіночі', 'чоловічий', 'чоловічі', 'унісекс'
-]);
-
-function extractCandidateTerms(text) {
-  const cleaned = norm(text).replace(/[^a-zа-яіїєґ0-9'\s]+/giu, ' ');
-  const words = cleaned.split(/\s+/).map((x) => x.trim()).filter(Boolean);
-  const base = words.filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
-  const terms = new Set(base);
-
-  for (const group of ALIAS_GROUPS) {
-    if (group.some((alias) => base.some((w) => wordBoundaryContains(w, alias) || wordBoundaryContains(alias, w)))) {
-      for (const alias of group) terms.add(alias);
-    }
-  }
-
-  return [...terms].filter((x) => x.length >= 3).slice(0, 40);
-}
-
-function fallbackFindByNotes(text, requestedGender) {
-  const terms = extractCandidateTerms(text);
-  if (!terms.length) return [];
-
-  const rows = getAllPerfumes(3000).filter((row) => genderAllowed(row.gender, requestedGender));
-  const found = [];
-
-  for (const row of rows) {
-    const notes = String(row.notes || '');
-    if (!notes.trim()) continue;
-
-    const matched = terms.filter((term) => wordBoundaryContains(notes, term));
-    if (!matched.length) continue;
-
-    const g = normalizeGenderValue(row.gender);
-    const score = 30000 + matched.length * 1000 + (g === 'unisex' ? 200 : 0) - Number(row.id || 0) * 0.01;
-    found.push({
-      ...row,
-      match_score: Math.max(Number(row.match_score || 0), score),
-      match_bucket: 'exact_note_runtime',
-      direct_match_field: 'ноти',
-      direct_match_type: 'exact_note_runtime',
-      why_selected: ['точний збіг ноти у полі "ноти": ' + [...new Set(matched)].slice(0, 5).join(', ')],
+async function sendExactBatch(ctx, items, offset = 0) {
+  const batch = items.slice(offset, offset + BATCH_SIZE);
+  for (const item of batch) {
+    await sendPerfumeCard(ctx, buildExactNotePayload(item), {
+      notes: true,
+      season: false,
     });
   }
 
-  return found.sort((a, b) => Number(b.match_score || 0) - Number(a.match_score || 0)).slice(0, SEARCH_LIMIT);
+  const nextOffset = offset + batch.length;
+  const remaining = Math.max(items.length - nextOffset, 0);
+  return { sent: batch.length, nextOffset, remaining };
 }
 
-async function sendPage(ctx, state) {
-  const offset = Number(state.offset || 0);
-  const items = Array.isArray(state.items) ? state.items : [];
-  const page = items.slice(offset, offset + PAGE_SIZE);
+async function handleMore(ctx, text) {
+  if (!isMoreRequest(text)) return false;
 
-  if (!page.length) {
+  const tgId = getTgId(ctx);
+  const state = tgId ? exactNoteState.get(tgId) : null;
+  if (!state?.items?.length) return false;
+
+  const { sent, nextOffset, remaining } = await sendExactBatch(ctx, state.items, state.offset || 0);
+  if (!sent) {
+    exactNoteState.delete(tgId);
     await ctx.reply('✅ Це всі знайдені варіанти за цим запитом.');
     return true;
   }
 
-  for (const item of page) {
-    await sendPerfumeCard(ctx, item, { notes: true, season: false });
-  }
-
-  const nextOffset = offset + page.length;
-  const remaining = Math.max(0, items.length - nextOffset);
-  exactNoteState.set(getTgId(ctx), { ...state, offset: nextOffset });
-
   if (remaining > 0) {
+    exactNoteState.set(tgId, { ...state, offset: nextOffset });
     await ctx.reply('➡️ Є ще ' + remaining + ' варіантів. Напишіть: "ще" або "дай ще 3"');
   } else {
+    exactNoteState.delete(tgId);
     await ctx.reply('✅ Це всі знайдені варіанти за цим запитом.');
   }
 
@@ -166,56 +125,57 @@ async function sendPage(ctx, state) {
 }
 
 async function onExactNoteText(ctx) {
-  const text = String(ctx?.message?.text || '').trim();
+  const text = String(ctx.message?.text || '').trim();
   const tgId = getTgId(ctx);
-  if (!tgId || !text || text.startsWith('/')) return false;
 
-  if (isMoreText(text)) {
-    const state = exactNoteState.get(tgId);
-    if (state) return sendPage(ctx, state);
-    return false;
-  }
+  if (!text || !tgId) return false;
 
-  const requestedGender = detectGenderFromText(text);
+  if (await handleMore(ctx, text)) return true;
+  if (!shouldTryExactNote(text)) return false;
+
+  const gender = getRequestedGender(text);
   let matches = [];
 
   try {
     matches = findExactNoteMatches(text, {
-      limit: SEARCH_LIMIT,
-      gender: requestedGender,
-      requestedGender,
-    }) || [];
-  } catch (e) {
-    console.error('[exactNoteTelegramFlow] findExactNoteMatches failed:', e?.message || e);
-  }
-
-  const fallback = fallbackFindByNotes(text, requestedGender);
-  const all = uniqById([...fallback, ...matches])
-    .sort((a, b) => Number(b.match_score || 0) - Number(a.match_score || 0))
-    .slice(0, SEARCH_LIMIT);
-
-  if (!all.length) return false;
-
-  if (process.env.SEARCH_DEBUG === '1') {
-    console.log('[exactNoteTelegramFlow] intercepted', {
-      text,
-      exact: matches.length,
-      fallback: fallback.length,
-      returned: all.length,
-      codes: all.map((x) => x.number_code),
+      gender,
+      limit: MAX_EXACT_NOTE_RESULTS,
     });
+  } catch (e) {
+    console.error('[exactNoteTelegramFlow:v18] findExactNoteMatches failed:', e?.message || e);
+    return false;
   }
 
-  await ctx.reply('✅ Знайшов точні збіги по ноті в базі.\nУсього знайдено: ' + all.length + '.');
+  if (!Array.isArray(matches) || !matches.length) return false;
 
   exactNoteState.set(tgId, {
-    kind: 'exact_note_router_v16',
-    query: text,
-    items: all,
+    text,
+    items: matches,
     offset: 0,
   });
 
-  return sendPage(ctx, exactNoteState.get(tgId));
+  await ctx.reply(
+    '✅ Знайшов точні збіги по ноті в базі.\n' +
+    'Усього знайдено: ' + matches.length + '.\n' +
+    'Спочатку показую унісекс, потім жіночі/чоловічі за релевантністю.'
+  );
+
+  const { sent, nextOffset, remaining } = await sendExactBatch(ctx, matches, 0);
+
+  if (!sent) {
+    exactNoteState.delete(tgId);
+    return false;
+  }
+
+  if (remaining > 0) {
+    exactNoteState.set(tgId, { text, items: matches, offset: nextOffset });
+    await ctx.reply('➡️ Є ще ' + remaining + ' варіантів. Напишіть: "ще" або "дай ще 3"');
+  } else {
+    exactNoteState.delete(tgId);
+    await ctx.reply('✅ Це всі знайдені варіанти за цим запитом.');
+  }
+
+  return true;
 }
 
 module.exports = {
