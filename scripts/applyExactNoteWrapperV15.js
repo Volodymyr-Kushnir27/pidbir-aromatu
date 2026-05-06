@@ -96,7 +96,7 @@ try {
     });
 
     if (remaining > 0) {
-      await ctx.reply(`➡️ Є ще ${remaining} варіантів. Напишіть: "ще" або "дай ще 3"`);
+      await ctx.reply("➡️ Є ще ${remaining} варіантів. Напишіть: "ще" або "дай ще 3");
     } else {
       await ctx.reply('✅ Це всі знайдені варіанти за цим запитом.');
     }
@@ -135,7 +135,7 @@ try {
         try { incrementSearchCounterForActor(ctx); } catch {}
 
         await ctx.reply(
-          `✅ Знайшов точні збіги по ноті в базі.\\nУсього знайдено: ${exactMatches.length}.`
+          "✅ Знайшов точні збіги по ноті в базі.\\nУсього знайдено: ${exactMatches.length}."
         );
 
         setLastSearch(ctx, {
