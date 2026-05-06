@@ -9,7 +9,7 @@ function norm(value) {
     .toLowerCase()
     .replace(/ё/g, "е")
     .replace(/ґ/g, "г")
-    .replace(/[ʼ’‘`´]/g, "'")
+    .replace(/[ʼ’‘`´']/g, " ")
     .replace(/[“”"«»]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -27,6 +27,7 @@ function parseLocalQuery(userText) {
     gender,
     cleanQuery,
     aliasedQuery,
+    searchQuery: aliasedQuery || cleanQuery || raw,
     isProbablyDirectName: Boolean(cleanQuery && cleanQuery.split(/\s+/).length <= 6),
   };
 }

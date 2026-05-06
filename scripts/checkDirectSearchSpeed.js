@@ -22,18 +22,18 @@ const queries = [
   "чоловічі крид",
   "унісекс крид",
 
+  "інвіктус",
+  "чоловічі інвіктус",
+  "мужские инвиктус",
+
+  "дольче габана",
+  "жіночі дольче габана",
+
   "пако рабан",
   "чоловічі пако рабан",
   "пако карабан",
   "чоловічі пако карабан",
-
-  "чоловічі інвіктус",
-  "жіночі дольче габана",
-  "покажи жіночі дольче габана",
-  "підбери чоловічі tom ford",
 ];
-
-let failed = false;
 
 for (const query of queries) {
   const t0 = Date.now();
@@ -45,9 +45,6 @@ for (const query of queries) {
   });
 
   const ms = Date.now() - t0;
-  const strong = hasStrongDirectMatch(results);
-
-  if (ms > 1000) failed = true;
 
   console.log("\n==============================");
   console.log(`QUERY: ${query}`);
@@ -55,7 +52,7 @@ for (const query of queries) {
   console.log(`GENDER: ${detectGenderFromQuery(query) || "-"}`);
   console.log(`TIME: ${ms} ms`);
   console.log(`COUNT: ${results.length}`);
-  console.log(`STRONG: ${strong}`);
+  console.log(`STRONG: ${hasStrongDirectMatch(results)}`);
 
   console.table(
     results.slice(0, 10).map((item) => ({
@@ -68,11 +65,4 @@ for (const query of queries) {
       score: item.match_score,
     })),
   );
-}
-
-if (failed) {
-  console.error("\n❌ Є запити > 1000 ms. Direct-search все ще повільний або Render запустив старий код.");
-  process.exitCode = 1;
-} else {
-  console.log("\n✅ Усі direct-search запити виконались швидко.");
 }

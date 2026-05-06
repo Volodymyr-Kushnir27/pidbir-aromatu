@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-cd /opt/render/project/src
+set -e
 
 echo "Current DB files:"
-find /opt/render/project/src/data /var/data -maxdepth 1 \( -name "*.sqlite" -o -name "*.db" \) -print -exec ls -lh {} \;
+for db in \
+/opt/render/project/src/data/perfumes_filtered1.sqlite \
+/opt/render/project/src/data/catalog.db \
+/opt/render/project/src/data/perfumes_filtered.sqlite \
+/var/data/perfumes_filtered.sqlite \
+/var/data/perfumes_backup_2026-04-30.sqlite \
+/var/data/perfumes.sqlite
+do
+  [ -e "$db" ] && echo "$db" && ls -lh "$db" || true
+done
 
-echo
 if [ -f /var/data/perfumes_filtered.sqlite ]; then
   if ! sqlite3 /var/data/perfumes_filtered.sqlite "SELECT COUNT(*) FROM perfumes;" >/dev/null 2>&1; then
     echo "Renaming broken /var/data/perfumes_filtered.sqlite"
@@ -14,11 +20,11 @@ if [ -f /var/data/perfumes_filtered.sqlite ]; then
   fi
 fi
 
-if [ -f /var/data/perfumes.sqlite ]; then
-  echo "Using existing /var/data/perfumes.sqlite"
-else
-  echo "Copying source DB to /var/data/perfumes.sqlite"
+if [ ! -f /var/data/perfumes.sqlite ]; then
+  echo "Creating /var/data/perfumes.sqlite from project DB"
   cp /opt/render/project/src/data/perfumes_filtered.sqlite /var/data/perfumes.sqlite
+else
+  echo "Using existing /var/data/perfumes.sqlite"
 fi
 
 echo "Rebuilding FTS..."

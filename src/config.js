@@ -52,8 +52,8 @@ module.exports = {
   },
 
   SEARCH: {
-    LIMIT_CANDIDATES: 120,
-    TOP_K: 3,
-    MAX_ROWS_SCAN: 600,
+    LIMIT_CANDIDATES: Number(process.env.SEARCH_LIMIT_CANDIDATES || 30),
+    TOP_K: Number(process.env.SEARCH_TOP_K || 3),
+    MAX_ROWS_SCAN: Number(process.env.SEARCH_MAX_ROWS_SCAN || 300),
   },
 };

@@ -48,20 +48,14 @@ async function chatJSON({ system, user, temperature = 0.2 }) {
   return safeJsonParse(content);
 }
 
-/**
- * JSON + web search через Responses API.
- *
- * ENV:
- * OPENAI_WEB_MODEL=gpt-4.1-mini
- * OPENAI_WEB_SEARCH_TOOL=web_search_preview
- *
- * Якщо web_search_preview не підтримується — пробує web_search.
- */
 async function webJSON({ system, user, temperature = 0.15 }) {
+  if (String(process.env.PERFUME_WEB_LOOKUP || "0") === "0") {
+    return null;
+  }
+
   const model = process.env.OPENAI_WEB_MODEL || "gpt-4.1-mini";
   const preferredTool = process.env.OPENAI_WEB_SEARCH_TOOL || "web_search_preview";
-  const fallbackTool =
-    preferredTool === "web_search" ? "web_search_preview" : "web_search";
+  const fallbackTool = preferredTool === "web_search" ? "web_search_preview" : "web_search";
 
   const input = [
     {

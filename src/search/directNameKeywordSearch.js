@@ -1,13 +1,14 @@
 const { getAllPerfumes } = require("./catalogRepo");
 
 /**
- * Fast direct DB search before AI.
+ * FINAL fast direct DB search before AI.
  *
- * Goals:
- * - finish in milliseconds on Render;
- * - treat gender/intent words as filters/noise, not as part of perfume name;
- * - search name/version/keywords/code first;
- * - never run Levenshtein or heavy fuzzy search over notes/description.
+ * Rules:
+ * - gender / intent words are removed from the name query;
+ * - direct name/version/keywords search is always fast;
+ * - no Levenshtein;
+ * - apostrophes are separators: L'imperatrice -> l imperatrice;
+ * - exact name/version/keywords has priority over notes/style.
  */
 
 function escapeRegExp(value) {
@@ -37,26 +38,23 @@ function norm(value) {
     .toLowerCase()
     .replace(/ё/g, "е")
     .replace(/ґ/g, "г")
-    .replace(/[ʼ’‘`´]/g, "'")
+    .replace(/[ʼ’‘`´']/g, " ")
     .replace(/[“”"«»]/g, " ")
     .replace(/&/g, " and ")
     .replace(/№/g, " ")
-    .replace(/[^a-zа-яіїє0-9']+/gi, " ")
+    .replace(/[^a-zа-яіїє0-9]+/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function compact(value) {
-  return norm(value).replace(/\s+/g, "");
 }
 
 const INTENT_STOP_WORDS = new Set([
   "я", "мені", "мне", "меня", "хочу", "треба", "надо", "потрібно", "нужно",
   "підбери", "подбери", "знайди", "найди", "покажи", "дай", "порекомендуй",
   "схоже", "схожий", "схожа", "схожі", "похожий", "похожее", "похожие",
-  "аналог", "аналоги", "аромат", "аромату", "ароматом", "парфум", "парфуми",
-  "парфумом", "парфюм", "парфюмом", "духи", "fragrance", "perfume", "на", "і", "и",
-  "та", "або", "или", "or", "для", "for", "мене", "себе", "будь", "ласка",
+  "аналог", "аналоги", "аромат", "аромату", "ароматом", "аромати", "ароматів",
+  "парфум", "парфуми", "парфумом", "парфюм", "парфюмом", "духи",
+  "fragrance", "perfume", "на", "і", "и", "та", "або", "или", "or", "для", "for",
+  "мене", "себе", "будь", "ласка", "будьласка",
 ]);
 
 const GENDER_WORDS = new Set([
@@ -75,12 +73,34 @@ function isNoiseToken(token) {
 }
 
 function detectGenderFromQuery(text) {
-  const t = norm(text);
-  if (!t) return null;
+  const tokens = norm(text).split(/\s+/).filter(Boolean);
+  const joined = ` ${tokens.join(" ")} `;
 
-  if (/\b(унісекс|унісексові|унисекс|unisex|для всіх|для всех)\b/i.test(t)) return "unisex";
-  if (/\b(жіночі|жіночий|жіноче|жіноча|для жінки|для жінок|женские|женский|женская|для женщины|для женщин|female|women|woman)\b/i.test(t)) return "female";
-  if (/\b(чоловічі|чоловічий|чоловіче|чоловіча|для чоловіка|для чоловіків|мужские|мужской|мужская|для мужчины|для мужчин|male|men|man)\b/i.test(t)) return "male";
+  if (tokens.some((x) => ["унісекс", "унісексові", "унисекс", "unisex"].includes(x))) return "unisex";
+
+  if (
+    tokens.some((x) =>
+      ["жіночі", "жіночий", "жіноче", "жіноча", "жінки", "жінок", "женские", "женский", "женская", "female", "women", "woman"].includes(x)
+    ) ||
+    joined.includes(" для жінки ") ||
+    joined.includes(" для жінок ") ||
+    joined.includes(" для женщины ") ||
+    joined.includes(" для женщин ")
+  ) {
+    return "female";
+  }
+
+  if (
+    tokens.some((x) =>
+      ["чоловічі", "чоловічий", "чоловіче", "чоловіча", "чоловіка", "чоловіків", "мужские", "мужской", "мужская", "male", "men", "man"].includes(x)
+    ) ||
+    joined.includes(" для чоловіка ") ||
+    joined.includes(" для чоловіків ") ||
+    joined.includes(" для мужчины ") ||
+    joined.includes(" для мужчин ")
+  ) {
+    return "male";
+  }
 
   return null;
 }
@@ -103,7 +123,6 @@ function getAliases() {
 
     ["d g", "dolce gabbana"], ["dg", "dolce gabbana"], ["d and g", "dolce gabbana"],
     ["dolce and gabbana", "dolce gabbana"], ["dolce gabbana", "dolce gabbana"],
-    ["дольче габбана", "dolce gabbana"], ["дольче габана", "dolce gabbana"],
     ["дольче габбана", "dolce gabbana"], ["дольче габана", "dolce gabbana"],
     ["дольче энд габбана", "dolce gabbana"], ["дольче енд габбана", "dolce gabbana"],
     ["дольче", "dolce"], ["габбана", "gabbana"], ["габана", "gabbana"],
@@ -158,66 +177,47 @@ function cleanDirectQuery(value) {
   const raw = norm(value);
   if (!raw) return "";
 
-  const aliased = applyCommonAliases(raw);
-  const tokens = aliased
+  const withoutNoise = raw
     .split(/\s+/)
     .map((x) => x.trim())
     .filter(Boolean)
-    .filter((token) => !isNoiseToken(token));
+    .filter((token) => !isNoiseToken(token))
+    .join(" ");
 
-  return norm(tokens.join(" "));
+  return applyCommonAliases(withoutNoise);
 }
 
 function tokenize(value) {
-  return cleanDirectQuery(value)
+  return norm(value)
     .split(/\s+/)
     .map((x) => x.trim())
-    .filter((x) => x.length >= 2);
-}
-
-function stemToken(token) {
-  let t = applyCommonAliases(token);
-  if (t.length <= 4) return t;
-
-  const endings = [
-    "ами", "ями", "ого", "его", "ему", "ому", "ими", "ыми", "ою", "ею", "єю",
-    "ой", "ей", "ом", "ем", "ам", "ям", "ах", "ях", "ий", "ій", "ый", "ая",
-    "ое", "ые", "ие", "а", "у", "ю", "я", "е", "и", "і", "о",
-  ];
-
-  for (const ending of endings) {
-    if (t.endsWith(ending) && t.length - ending.length >= 4) return t.slice(0, -ending.length);
-  }
-
-  return t;
-}
-
-function tokenSoftMatch(queryToken, fieldToken) {
-  const q = stemToken(queryToken);
-  const f = stemToken(fieldToken);
-
-  if (!q || !f) return false;
-  if (q === f) return true;
-  if (q.length >= 5 && f.length >= 5 && (q.startsWith(f) || f.startsWith(q))) return true;
-
-  // No Levenshtein here. Direct search must be fast.
-  return false;
+    .filter((x) => x.length >= 2)
+    .filter((x) => !isNoiseToken(x));
 }
 
 function fieldTokens(value) {
-  return norm(value)
+  return applyCommonAliases(value)
     .split(/\s+/)
     .map((x) => x.trim())
     .filter((x) => x.length >= 2);
 }
 
 function hasPhrase(field, phrase) {
-  const f = norm(field);
-  const p = norm(phrase);
+  const f = applyCommonAliases(field);
+  const p = applyCommonAliases(phrase);
   if (!f || !p) return false;
   const parts = p.split(/\s+/).map(escapeRegExp);
   const re = new RegExp(`(^|\\s)${parts.join("\\s+")}(?=\\s|$)`, "i");
   return re.test(f);
+}
+
+function tokenSoftMatch(queryToken, fieldToken) {
+  const q = applyCommonAliases(queryToken);
+  const f = applyCommonAliases(fieldToken);
+  if (!q || !f) return false;
+  if (q === f) return true;
+  if (q.length >= 5 && f.length >= 5 && (q.startsWith(f) || f.startsWith(q))) return true;
+  return false;
 }
 
 function countTokenMatches(queryTokens = [], fieldTokenList = []) {
@@ -261,7 +261,6 @@ function scoreField(fieldValue, query, fieldWeight, fieldName) {
     };
   }
 
-  // Partial brand matches are useful for direct brand search, but should not overpower exact perfume names.
   if (exactOverlaps.length >= 1 && ["назва", "версія", "ключові слова"].includes(fieldName)) {
     return {
       score: qTokens.length === 1 ? 7600 + fieldWeight : 5200 + fieldWeight + exactOverlaps.length * 80,
@@ -271,7 +270,6 @@ function scoreField(fieldValue, query, fieldWeight, fieldName) {
   }
 
   const softOverlaps = countTokenMatches(qTokens, fTokens);
-
   if (softOverlaps.length === qTokens.length) {
     return {
       score: 7000 + fieldWeight + softOverlaps.length * 80,
@@ -290,9 +288,6 @@ function scorePerfume(item, query) {
     { label: "ключові слова", value: item.keywords, weight: 1200 },
     { label: "код", value: item.number_code, weight: 200 },
     { label: "коди", value: item.number_codes, weight: 180 },
-    // Notes/description are intentionally weak and checked only after prefilter.
-    { label: "ноти", value: item.notes, weight: 150 },
-    { label: "опис", value: item.description || item.short_desc, weight: 80 },
   ];
 
   let best = { score: 0, reason: "", field: "", type: "" };
@@ -324,11 +319,11 @@ function buildPrefilterTerms(query) {
   const cleaned = cleanDirectQuery(query);
   const aliased = applyCommonAliases(cleaned);
   const terms = unique([cleaned, aliased, ...tokenize(cleaned), ...tokenize(aliased)]).filter((x) => x.length >= 2);
-  return terms.slice(0, 16);
+  return terms.slice(0, 12);
 }
 
 function termMatchesHaystack(term, haystack) {
-  const t = norm(term);
+  const t = applyCommonAliases(term);
   if (!t || t.length < 2) return false;
 
   if (hasPhrase(haystack, t)) return true;
@@ -336,7 +331,6 @@ function termMatchesHaystack(term, haystack) {
   const tTokens = tokenize(t);
   if (!tTokens.length) return false;
 
-  // For multi-token aliases require all tokens, not just Dolce/Gabbana alone.
   if (tTokens.length > 1) {
     return tTokens.every((token) => hasPhrase(haystack, token));
   }
@@ -360,7 +354,7 @@ function rowContainsAnyTerm(item, terms = []) {
 function searchByNameAndKeywords(query, options = {}) {
   const start = Date.now();
 
-  const limit = Number(options.limit || 100);
+  const limit = Number(options.limit || 30);
   const minScore = Number(options.minScore || 1200);
   const scanLimit = Number(options.scanLimit || 1000);
 
@@ -371,11 +365,7 @@ function searchByNameAndKeywords(query, options = {}) {
   const allRows = getAllPerfumes(scanLimit);
   const prefiltered = allRows.filter((item) => rowContainsAnyTerm(item, terms));
 
-  // If there is no short-field prefilter match, do not run a heavy full scan.
-  // Let the next pipeline stage use AI normalize / notes search.
-  const rowsToScore = prefiltered;
-
-  const scored = rowsToScore
+  const scored = prefiltered
     .map((item) => {
       const candidates = unique([cleanedQuery, ...terms])
         .map((term) => scorePerfume(item, term))
@@ -391,7 +381,7 @@ function searchByNameAndKeywords(query, options = {}) {
       const diff = Number(b.match_score || 0) - Number(a.match_score || 0);
       if (diff !== 0) return diff;
 
-      const fieldPriority = { "назва": 1, "версія": 2, "ключові слова": 3, "код": 4, "коди": 5, "ноти": 6, "опис": 7 };
+      const fieldPriority = { "назва": 1, "версія": 2, "ключові слова": 3, "код": 4, "коди": 5 };
       const af = fieldPriority[String(a.direct_match_field || "")] || 99;
       const bf = fieldPriority[String(b.direct_match_field || "")] || 99;
       if (af !== bf) return af - bf;
@@ -404,7 +394,7 @@ function searchByNameAndKeywords(query, options = {}) {
       return Number(a.id || 0) - Number(b.id || 0);
     });
 
-  const out = uniqById(scored).slice(0, limit);
+  const out = uniqById(scored).slice(0, Math.min(limit, 30));
 
   if (String(process.env.SEARCH_DEBUG || "0") === "1") {
     console.log("[directNameKeywordSearch] done", {
@@ -445,7 +435,6 @@ module.exports = {
   cleanDirectQuery,
   detectGenderFromQuery,
   tokenize,
-  stemToken,
   tokenSoftMatch,
   scoreField,
   buildPrefilterTerms,
