@@ -1,47 +1,28 @@
 const { getAllPerfumes } = require("./catalogRepo");
 const {
   norm,
+  normalizePhrase,
   containsPhrase,
-  getExplicitRequestedNotes,
+  getExplicitRequestedNoteDetails,
   getExactNoteTerms,
-  getFallbackNoteTerms,
+  extractStyleTerms,
 } = require("./queryNormalizer");
 const { normalizeGenderValue } = require("./candidateSearch");
 
 function textForNoteSearch(row) {
-  // Exact note search must primarily use notes, not version/name, to avoid false positives like "габа" inside "Габана".
-  return norm([row.notes, row.keywords, row.accords].filter(Boolean).join(" | "));
+  return [
+    row.notes,
+    row.keywords,
+    row.type,
+    row.name,
+    row.version,
+    row.description,
+    row.short_desc,
+  ].filter(Boolean).join(" | ");
 }
 
-function containsTerm(text, term) {
-  return containsPhrase(text, term);
-}
-
-function matchedTerms(text, terms = []) {
-  return [...new Set((terms || []).filter((term) => containsTerm(text, term)))];
-}
-
-
-// AUX_STYLE_TERMS_FOR_NOTE_SEARCH
-// Стильові слова використовуються тільки як бонус після точного збігу ноти.
-// Вони не можуть витісняти ноту і не повинні запускати direct-search.
-const AUX_STYLE_GROUPS = {
-  trail: ["шлейфовий", "шлейфова", "шлейфове", "шлейфові", "шлейф", "sillage", "projection", "trail"],
-  sweet: ["солодкий", "солодка", "солодке", "солодкі", "сладкий", "sweet", "gourmand"],
-  fresh: ["свіжий", "свіжа", "свіже", "свіжі", "свежий", "fresh", "clean"],
-  spicy: ["пряний", "пряна", "пряне", "пряні", "spicy", "warm spicy"],
-  woody: ["деревний", "деревна", "деревне", "woody", "wood"],
-  floral: ["квітковий", "квіткова", "квіткове", "цветочный", "floral"],
-};
-
-function getAuxStyleTerms(rawText) {
-  const text = norm(rawText || "");
-  const out = [];
-  for (const terms of Object.values(AUX_STYLE_GROUPS)) {
-    const matched = terms.some((term) => containsTerm(text, term));
-    if (matched) out.push(...terms);
-  }
-  return [...new Set(out)];
+function fieldText(row, field) {
+  return String(row?.[field] || "");
 }
 
 function genderAllowed(rowGender, requestedGender) {
@@ -54,6 +35,21 @@ function genderAllowed(rowGender, requestedGender) {
   return true;
 }
 
+function countMatchedTerms(text, terms = []) {
+  const matched = [];
+  for (const term of terms || []) {
+    if (containsPhrase(text, term)) matched.push(term);
+  }
+  return matched;
+}
+
+function styleBonus(row, styleTerms = []) {
+  if (!styleTerms.length) return { score: 0, matched: [] };
+  const haystack = [row.keywords, row.type, row.description, row.short_desc].filter(Boolean).join(" | ");
+  const matched = styleTerms.filter((term) => containsPhrase(haystack, term));
+  return { score: matched.length * 80, matched };
+}
+
 function findExactNoteMatches(userTextOrProfile, options = {}) {
   const limit = Math.min(Number(options.limit || process.env.SEARCH_LIMIT_CANDIDATES || 30), 30);
   const requestedGender = options.gender || userTextOrProfile?.gender || null;
@@ -64,43 +60,71 @@ function findExactNoteMatches(userTextOrProfile, options = {}) {
         ...(userTextOrProfile?.notes_include || []),
         ...(userTextOrProfile?.notes_prefer || []),
         ...(userTextOrProfile?.raw_terms || []),
-      ].join(" ");
+        userTextOrProfile?.query,
+        userTextOrProfile?.text,
+      ].filter(Boolean).join(" ");
 
-  const canonicalNotes = getExplicitRequestedNotes(rawText);
-  if (!canonicalNotes.length) return [];
+  const noteDetails = getExplicitRequestedNoteDetails(rawText);
+  if (!noteDetails.length) return [];
 
-  const exactTerms = [...new Set(canonicalNotes.flatMap(getExactNoteTerms))];
-  const fallbackTerms = [...new Set(canonicalNotes.flatMap(getFallbackNoteTerms))];
+  const canonicalNotes = noteDetails.map((x) => x.canonical);
+  const exactTerms = canonicalNotes.flatMap(getExactNoteTerms);
+  const requestedStyleTerms = extractStyleTerms(rawText);
+
   const rows = getAllPerfumes(2000).filter((row) => genderAllowed(row.gender, requestedGender));
 
-  const exactRows = rows
+  const items = rows
     .map((row) => {
-      const haystack = textForNoteSearch(row);
-      const exactMatched = matchedTerms(haystack, exactTerms);
-      if (!exactMatched.length) return null;
-      const fallbackMatched = matchedTerms(haystack, fallbackTerms);
+      const notesText = fieldText(row, "notes");
+      const keywordsText = fieldText(row, "keywords");
+      const nameVersionText = [row.name, row.version].filter(Boolean).join(" | ");
+      const allText = textForNoteSearch(row);
+
+      const matchedInNotes = countMatchedTerms(notesText, exactTerms);
+      const matchedInKeywords = countMatchedTerms(keywordsText, exactTerms);
+      const matchedInNameVersion = countMatchedTerms(nameVersionText, exactTerms);
+      const matchedAnywhere = countMatchedTerms(allText, exactTerms);
+
+      // Головне правило: якщо конкретна нота є в БД, пріоритет тільки точній ноті.
+      // Не дозволяємо загальним напрямам типу "фруктовий/квітковий/шлейфовий" заміняти ноту.
+      if (!matchedAnywhere.length) return null;
+
       const itemGender = normalizeGenderValue(row.gender);
-      const unisexBonus = itemGender === "unisex" ? 350 : 0;
-      const notesOnly = norm(row.notes || "");
-      const inNotesBonus = exactMatched.some((t) => containsTerm(notesOnly, t)) ? 10000 : 0;
+      const unisexBonus = itemGender === "unisex" ? 120 : 0;
+      const sBonus = styleBonus(row, requestedStyleTerms);
+
+      const score =
+        10000 +
+        matchedInNotes.length * 900 +
+        matchedInKeywords.length * 220 +
+        matchedInNameVersion.length * 120 +
+        sBonus.score +
+        unisexBonus -
+        Number(row.id || 0) * 0.01;
+
+      const shownTerms = [...new Set(matchedAnywhere)].slice(0, 6);
+      const why = [`точний збіг ноти: ${shownTerms.join(", ")}`];
+      if (sBonus.matched.length) {
+        why.push(`додатково збігається стиль: ${[...new Set(sBonus.matched)].join(", ")}`);
+      }
 
       return {
         ...row,
-        match_score: 1000 + inNotesBonus + exactMatched.length * 150 + fallbackMatched.length * 20 + unisexBonus,
+        match_score: score,
         match_bucket: "exact_note",
         direct_match_field: "ноти",
         direct_match_type: "exact_note",
-        why_selected: [
-          `точний збіг ноти: ${exactMatched.slice(0, 5).join(", ")}`,
-        ],
+        why_selected: why,
         _debug: {
           ...(row._debug || {}),
           exactNoteSearch: {
             canonicalNotes,
-            exactTerms: exactMatched,
-            fallbackTerms: fallbackMatched,
+            exactTerms: shownTerms,
+            matchedInNotes,
+            matchedInKeywords,
+            matchedInNameVersion,
+            styleTerms: sBonus.matched,
             unisexBonus,
-            inNotesBonus,
           },
         },
       };
@@ -116,20 +140,20 @@ function findExactNoteMatches(userTextOrProfile, options = {}) {
     })
     .slice(0, limit);
 
-  if (String(process.env.SEARCH_DEBUG || "0") === "1") {
+  if (process.env.SEARCH_DEBUG === "1") {
     console.log("[exactNoteSearch]", {
       rawText,
       requestedGender,
       canonicalNotes,
-      exactTerms,
-      fallbackTerms,
+      exactTerms: [...new Set(exactTerms)].slice(0, 30),
+      styleTerms: requestedStyleTerms,
       rows: rows.length,
-      returned: exactRows.length,
-      ids: exactRows.map((x) => x.id),
+      returned: items.length,
+      ids: items.map((x) => x.id),
     });
   }
 
-  return exactRows;
+  return items;
 }
 
 module.exports = {
