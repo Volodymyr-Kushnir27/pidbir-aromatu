@@ -1,13 +1,19 @@
 const { getAllPerfumes } = require("./catalogRepo");
 
 /**
- * Direct DB search before AI.
+ * FAST direct DB search before AI.
+ *
+ * Чому цей файл потрібен:
+ * - старий direct search робив fuzzy/Levenshtein по всіх полях усіх рядків;
+ * - на Render це могло зависати на 2/7 або 3/7;
+ * - цей варіант спочатку робить дешевий prefilter, а fuzzy застосовує тільки до name/version/keywords.
+ *
  * Priority:
  * 1. name
- * 2. version  ← seller/client aliases live here
+ * 2. version  — alias-назви / переклади / альтернативні назви
  * 3. keywords
- * 4. notes
- * 5. description
+ * 4. number codes
+ * 5. notes/description тільки як слабкий fallback
  */
 
 function escapeRegExp(value) {
@@ -55,6 +61,7 @@ function getAliases() {
     ["том форд", "tom ford"],
     ["томфорд", "tom ford"],
     ["том форт", "tom ford"],
+    ["том ford", "tom ford"],
     ["tom ford", "tom ford"],
     ["tomford", "tom ford"],
     ["tf", "tom ford"],
@@ -65,6 +72,11 @@ function getAliases() {
     ["пако рабани", "paco rabanne"],
     ["пако рабані", "paco rabanne"],
     ["пако рабанн", "paco rabanne"],
+    ["пако карабан", "paco rabanne"],
+    ["пако карабанн", "paco rabanne"],
+    ["карабан", "rabanne"],
+    ["карабане", "rabanne"],
+    ["карабанне", "rabanne"],
     ["пако", "paco"],
     ["рабан", "rabanne"],
     ["рабане", "rabanne"],
@@ -107,6 +119,8 @@ function getAliases() {
     ["императриса", "imperatrice"],
     ["императриця", "imperatrice"],
     ["імператрица", "imperatrice"],
+    ["імператриц", "imperatrice"],
+    ["императриц", "imperatrice"],
     ["l imperatrice", "imperatrice"],
     ["l'imperatrice", "imperatrice"],
     ["limperatrice", "imperatrice"],
@@ -230,27 +244,33 @@ function expandTokenForms(token) {
   return unique([t, stem].filter(Boolean));
 }
 
-function levenshtein(a, b) {
+function levenshteinLimited(a, b, limit = 2) {
   const s = String(a || "");
   const t = String(b || "");
 
   if (s === t) return 0;
   if (!s.length) return t.length;
   if (!t.length) return s.length;
+  if (Math.abs(s.length - t.length) > limit) return limit + 1;
 
-  const dp = Array.from({ length: s.length + 1 }, () => Array(t.length + 1).fill(0));
-
-  for (let i = 0; i <= s.length; i += 1) dp[i][0] = i;
-  for (let j = 0; j <= t.length; j += 1) dp[0][j] = j;
+  let prev = Array.from({ length: t.length + 1 }, (_, i) => i);
+  let curr = new Array(t.length + 1);
 
   for (let i = 1; i <= s.length; i += 1) {
+    curr[0] = i;
+    let rowMin = curr[0];
+
     for (let j = 1; j <= t.length; j += 1) {
       const cost = s[i - 1] === t[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      if (curr[j] < rowMin) rowMin = curr[j];
     }
+
+    if (rowMin > limit) return limit + 1;
+    [prev, curr] = [curr, prev];
   }
 
-  return dp[s.length][t.length];
+  return prev[t.length];
 }
 
 function fuzzyDistanceLimit(token) {
@@ -258,7 +278,7 @@ function fuzzyDistanceLimit(token) {
   if (len <= 4) return 0;
   if (len <= 7) return 1;
   if (len <= 10) return 2;
-  return 3;
+  return 2;
 }
 
 function tokenSoftMatch(queryToken, fieldToken) {
@@ -277,7 +297,8 @@ function tokenSoftMatch(queryToken, fieldToken) {
       if (!qf || !ff) continue;
       if (qf === ff) return true;
       if (qf.length >= 4 && ff.length >= 4 && (qf.startsWith(ff) || ff.startsWith(qf))) return true;
-      if (levenshtein(qf, ff) <= fuzzyDistanceLimit(qf)) return true;
+      const limit = fuzzyDistanceLimit(qf);
+      if (levenshteinLimited(qf, ff, limit) <= limit) return true;
     }
   }
 
@@ -286,10 +307,13 @@ function tokenSoftMatch(queryToken, fieldToken) {
 
 function countSoftTokenMatches(queryTokens = [], fieldTokensList = []) {
   const matched = [];
-  for (const q of queryTokens) {
-    const hit = fieldTokensList.find((f) => tokenSoftMatch(q, f));
+  const limitedFieldTokens = unique(fieldTokensList).slice(0, 60);
+
+  for (const q of queryTokens.slice(0, 5)) {
+    const hit = limitedFieldTokens.find((f) => tokenSoftMatch(q, f));
     if (hit) matched.push(q);
   }
+
   return unique(matched);
 }
 
@@ -314,8 +338,8 @@ function scoreField(fieldValue, query, fieldWeight, fieldName) {
 
   if (!field || !q) return { score: 0, reason: "", type: "" };
 
-  const qTokens = tokenize(q);
-  const fTokens = tokenize(field);
+  const qTokens = tokenize(q).slice(0, 5);
+  const fTokens = tokenize(field).slice(0, 80);
 
   if (field === q || originalField === originalQuery) {
     return { score: 13000 + fieldWeight, reason: "100% збіг", type: "exact_full" };
@@ -351,13 +375,16 @@ function scoreField(fieldValue, query, fieldWeight, fieldName) {
     return { score: 4800 + fieldWeight, reason: `частковий збіг слова: ${exactOverlaps[0]}`, type: "partial_token" };
   }
 
-  const softOverlaps = countSoftTokenMatches(qTokens, fTokens);
-  if (softOverlaps.length >= 1) {
-    return {
-      score: qTokens.length === 1 ? 7600 + fieldWeight : 6000 + fieldWeight + softOverlaps.length * 120,
-      reason: `схожий збіг слова: ${softOverlaps.slice(0, 5).join(", ")}`,
-      type: "soft_token",
-    };
+  // Fuzzy only for short/high-value fields. Notes/description fuzzy was the main performance trap.
+  if (["назва", "версія", "ключові слова"].includes(fieldName)) {
+    const softOverlaps = countSoftTokenMatches(qTokens, fTokens);
+    if (softOverlaps.length >= 1) {
+      return {
+        score: qTokens.length === 1 ? 7600 + fieldWeight : 6000 + fieldWeight + softOverlaps.length * 120,
+        reason: `схожий збіг слова: ${softOverlaps.slice(0, 5).join(", ")}`,
+        type: "soft_token",
+      };
+    }
   }
 
   return { score: 0, reason: "", type: "" };
@@ -365,13 +392,13 @@ function scoreField(fieldValue, query, fieldWeight, fieldName) {
 
 function scorePerfume(item, query) {
   const fields = [
-    { label: "назва", value: item.name, weight: 1600 },
-    { label: "версія", value: item.version, weight: 1550 },
+    { label: "назва", value: item.name, weight: 1800 },
+    { label: "версія", value: item.version, weight: 1700 },
     { label: "ключові слова", value: item.keywords, weight: 1200 },
-    { label: "ноти", value: item.notes, weight: 700 },
-    { label: "опис", value: item.description || item.short_desc, weight: 250 },
-    { label: "код", value: item.number_code, weight: 150 },
-    { label: "коди", value: item.number_codes, weight: 120 },
+    { label: "код", value: item.number_code, weight: 300 },
+    { label: "коди", value: item.number_codes, weight: 250 },
+    { label: "ноти", value: item.notes, weight: 350 },
+    { label: "опис", value: item.description || item.short_desc, weight: 100 },
   ];
 
   let best = { score: 0, reason: "", field: "", type: "" };
@@ -406,19 +433,27 @@ function buildPrefilterTerms(query) {
   const compactRaw = compact(query);
   const compactAliased = compact(aliased);
 
-  if (compactRaw.includes("томфорд") || compactAliased.includes("tomford")) {
+  if (compactRaw.includes("томфорд") || compactAliased.includes("tomford") || aliased.includes("tom ford")) {
     extra.push("том форд", "томфорд", "tom ford", "tomford", "ford");
   }
 
-  if (compactRaw.includes("пакорабан") || compactRaw.includes("рабан") || compactAliased.includes("pacorabanne") || compactAliased.includes("rabanne")) {
-    extra.push("пако рабан", "пако рабане", "пако рабанне", "рабан", "рабане", "рабанне", "paco rabanne", "rabanne", "paco");
+  if (
+    compactRaw.includes("пакорабан") ||
+    compactRaw.includes("пакокарабан") ||
+    compactRaw.includes("рабан") ||
+    compactRaw.includes("карабан") ||
+    compactAliased.includes("pacorabanne") ||
+    compactAliased.includes("rabanne") ||
+    aliased.includes("paco rabanne")
+  ) {
+    extra.push("пако рабан", "пако карабан", "рабан", "карабан", "paco rabanne", "rabanne", "paco");
   }
 
-  if (compactRaw.includes("императриц") || compactRaw.includes("імператриц") || compactAliased.includes("imperatrice")) {
+  if (compactRaw.includes("императриц") || compactRaw.includes("імператриц") || compactAliased.includes("imperatrice") || aliased.includes("imperatrice")) {
     extra.push("императрица", "імператриця", "imperatrice", "l imperatrice", "l'imperatrice", "dolce gabbana imperatrice");
   }
 
-  if (compactRaw.includes("лакост") || compactAliased.includes("lacoste")) {
+  if (compactRaw.includes("лакост") || compactAliased.includes("lacoste") || aliased.includes("lacoste")) {
     extra.push("лакоста", "лакост", "лакосте", "lacoste", "lacost", "lakosta", "lakost", "essential", "эссеншл", "эссеншел", "ессеншл", "ессеншел", "есеншл", "есеншел");
   }
 
@@ -434,13 +469,56 @@ function buildPrefilterTerms(query) {
   const aliasedTokens = aliased.split(/\s+/).filter((x) => x.length >= 2);
   const stems = [...rawTokens, ...aliasedTokens, ...extra].map((x) => stemToken(x)).filter((x) => x.length >= 2);
 
-  return unique([raw, aliased, ...extra, ...rawTokens, ...aliasedTokens, ...stems]).slice(0, 40);
+  return unique([raw, aliased, ...extra, ...rawTokens, ...aliasedTokens, ...stems]).slice(0, 35);
+}
+
+function buildSearchableHighValueText(item) {
+  return applyCommonAliases([
+    item?.name,
+    item?.version,
+    item?.keywords,
+    item?.number_code,
+    item?.number_codes,
+  ].filter(Boolean).join(" "));
+}
+
+function buildSearchableFullText(item) {
+  return applyCommonAliases([
+    item?.name,
+    item?.version,
+    item?.keywords,
+    item?.number_code,
+    item?.number_codes,
+    item?.notes,
+    item?.description || item?.short_desc,
+  ].filter(Boolean).join(" "));
+}
+
+function itemPassesFastPrefilter(item, terms = []) {
+  const high = buildSearchableHighValueText(item);
+  const full = buildSearchableFullText(item);
+
+  for (const term of terms) {
+    const t = applyCommonAliases(term);
+    if (!t) continue;
+
+    if (high.includes(t)) return true;
+
+    const tokens = tokenize(t);
+    if (tokens.some((token) => token.length >= 3 && high.includes(token))) return true;
+
+    // Full text only exact phrase/tokens, no fuzzy.
+    if (t.length >= 4 && full.includes(t)) return true;
+  }
+
+  return false;
 }
 
 function searchByNameAndKeywords(query, options = {}) {
+  const started = Date.now();
   const limit = Number(options.limit || 100);
   const minScore = Number(options.minScore || 1200);
-  const scanLimit = Number(options.scanLimit || 5000);
+  const scanLimit = Number(options.scanLimit || 1000);
 
   const q = applyCommonAliases(query);
   if (!q || q.length < 2) return [];
@@ -448,7 +526,11 @@ function searchByNameAndKeywords(query, options = {}) {
   const terms = buildPrefilterTerms(query);
   const allRows = getAllPerfumes(scanLimit);
 
-  const scored = allRows
+  // Critical performance fix: do not fuzzy-score every row/field.
+  const prefiltered = allRows.filter((item) => itemPassesFastPrefilter(item, terms));
+  const rowsToScore = prefiltered.length ? prefiltered : allRows.slice(0, Math.min(allRows.length, 300));
+
+  const scored = rowsToScore
     .map((item) => {
       const allScores = terms.map((term) => scorePerfume(item, term)).filter(Boolean);
       if (!allScores.length) return null;
@@ -461,7 +543,7 @@ function searchByNameAndKeywords(query, options = {}) {
       const diff = Number(b.match_score || 0) - Number(a.match_score || 0);
       if (diff !== 0) return diff;
 
-      const fieldPriority = { "назва": 1, "версія": 2, "ключові слова": 3, "ноти": 4, "опис": 5, "код": 6, "коди": 7 };
+      const fieldPriority = { "назва": 1, "версія": 2, "ключові слова": 3, "код": 4, "коди": 5, "ноти": 6, "опис": 7 };
       const af = fieldPriority[String(a.direct_match_field || "")] || 99;
       const bf = fieldPriority[String(b.direct_match_field || "")] || 99;
       if (af !== bf) return af - bf;
@@ -474,7 +556,20 @@ function searchByNameAndKeywords(query, options = {}) {
       return Number(a.id || 0) - Number(b.id || 0);
     });
 
-  return uniqById(scored).slice(0, limit);
+  const out = uniqById(scored).slice(0, limit);
+
+  if (String(process.env.SEARCH_DEBUG || "0") === "1") {
+    console.log("[directNameKeywordSearch] done", {
+      query,
+      terms: terms.slice(0, 10),
+      allRows: allRows.length,
+      prefiltered: prefiltered.length,
+      returned: out.length,
+      ms: Date.now() - started,
+    });
+  }
+
+  return out;
 }
 
 function hasStrongDirectMatch(items = []) {
@@ -485,7 +580,7 @@ function hasStrongDirectMatch(items = []) {
   const type = String(first.direct_match_type || "");
   const field = String(first.direct_match_field || "");
 
-  if (["exact_full", "exact_phrase", "exact_token", "token_overlap", "important_partial_token"].includes(type)) return score >= 8500;
+  if (["exact_full", "exact_phrase", "exact_token", "token_overlap", "important_partial_token"].includes(type)) return score >= 8200;
   if (type === "soft_token") return score >= 7600;
   if (["назва", "версія", "ключові слова"].includes(field) && score >= 7600) return true;
 
