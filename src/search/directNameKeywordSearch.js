@@ -105,8 +105,63 @@ function detectGenderFromQuery(text) {
   return null;
 }
 
+
+
+// DIRECT_BRAND_GENDER_FIX_V21
+function getRowGender(item) {
+  return item?.gender ?? item?.for_whom ?? item?.sex ?? item?.target_gender ?? "";
+}
+
+function normalizeDirectGenderValue(value) {
+  const g = norm(String(value || ""));
+  if (!g) return "unknown";
+
+  const hasUnisex = g.includes("унісекс") || g.includes("унисекс") || /(^|\s)unisex(?=\s|$)/i.test(g);
+  const hasFemale = g.includes("жіноч") || g.includes("женск") || /(^|\s)(female|woman|women)(?=\s|$)/i.test(g);
+  const hasMale = g.includes("чолов") || g.includes("мужск") || /(^|\s)(male|man|men)(?=\s|$)/i.test(g);
+
+  if (hasUnisex) return "unisex";
+  if (hasFemale && hasMale) return "unisex";
+  if (hasFemale) return "female";
+  if (hasMale) return "male";
+  return "unknown";
+}
+
+function directGenderAllowed(item, requestedGender) {
+  const req = normalizeDirectGenderValue(requestedGender);
+  const g = normalizeDirectGenderValue(getRowGender(item));
+  if (!req || req === "unknown") return true;
+  if (req === "male") return g === "male" || g === "unisex";
+  if (req === "female") return g === "female" || g === "unisex";
+  if (req === "unisex") return g === "unisex";
+  return true;
+}
+
+function directGenderRank(item, requestedGender) {
+  const req = normalizeDirectGenderValue(requestedGender);
+  const g = normalizeDirectGenderValue(getRowGender(item));
+  if (req === "male") {
+    if (g === "male") return 0;
+    if (g === "unisex") return 1;
+    return 9;
+  }
+  if (req === "female") {
+    if (g === "female") return 0;
+    if (g === "unisex") return 1;
+    return 9;
+  }
+  if (req === "unisex") {
+    if (g === "unisex") return 0;
+    return 9;
+  }
+  return 0;
+}
+
 function getAliases() {
   return [
+    // DIRECT_BRAND_GENDER_FIX_V21: Chanel brand aliases
+    ["шанель", "chanel"], ["шанел", "chanel"], ["шанель чоловічі", "chanel"],
+    ["шанель мужские", "chanel"], ["chanel", "chanel"], ["chanell", "chanel"], ["chanelle", "chanel"],
     ["том форд", "tom ford"], ["томфорд", "tom ford"], ["том форт", "tom ford"],
     ["tom ford", "tom ford"], ["tomford", "tom ford"], ["tf", "tom ford"],
 
@@ -361,9 +416,11 @@ function searchByNameAndKeywords(query, options = {}) {
   const cleanedQuery = cleanDirectQuery(query);
   if (!cleanedQuery || cleanedQuery.length < 2) return [];
 
+  const requestedGender = options.gender || detectGenderFromQuery(query);
   const terms = buildPrefilterTerms(cleanedQuery);
   const allRows = getAllPerfumes(scanLimit);
-  const prefiltered = allRows.filter((item) => rowContainsAnyTerm(item, terms));
+  const genderRows = allRows.filter((item) => directGenderAllowed(item, requestedGender));
+  const prefiltered = genderRows.filter((item) => rowContainsAnyTerm(item, terms));
 
   const scored = prefiltered
     .map((item) => {
@@ -378,6 +435,9 @@ function searchByNameAndKeywords(query, options = {}) {
     .filter(Boolean)
     .filter((item) => Number(item.match_score || 0) >= minScore)
     .sort((a, b) => {
+      const genderDiff = directGenderRank(a, requestedGender) - directGenderRank(b, requestedGender);
+      if (genderDiff !== 0) return genderDiff;
+
       const diff = Number(b.match_score || 0) - Number(a.match_score || 0);
       if (diff !== 0) return diff;
 
@@ -403,6 +463,8 @@ function searchByNameAndKeywords(query, options = {}) {
       gender: detectGenderFromQuery(query),
       terms,
       allRows: allRows.length,
+      genderRows: genderRows.length,
+      requestedGender,
       prefiltered: prefiltered.length,
       returned: out.length,
       ms: Date.now() - start,
@@ -434,6 +496,8 @@ module.exports = {
   applyCommonAliases,
   cleanDirectQuery,
   detectGenderFromQuery,
+  normalizeDirectGenderValue,
+  directGenderAllowed,
   tokenize,
   tokenSoftMatch,
   scoreField,
