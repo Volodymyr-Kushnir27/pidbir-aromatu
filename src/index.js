@@ -287,12 +287,7 @@ bot.on("text", async (ctx) => {
 
   // perfume/user flow
   if (role === "admin" || role === "user") {
-    // EXACT_NOTE_ROUTER_V18: exact note search must run before AI/user flow
-    const handledExactNote = await onExactNoteText(ctx);
-    if (handledExactNote) return;
-
-    
-    // EXACT_NOTE_ROUTER_V20: exact note search must run before AI/profile flow
+    // EXACT_NOTE_ROUTER: exact note search must run before AI/user flow
     const handledExactNote = await onExactNoteText(ctx);
     if (handledExactNote) return;
 
