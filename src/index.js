@@ -1,4 +1,3 @@
-const { onExactNoteText } = require("./flows/exactNoteTelegramFlow");
 require("dotenv").config();
 
 process.on("unhandledRejection", (e) => {
@@ -53,6 +52,7 @@ const {
 const { onDetailAction } = require("./flows/detailFlow");
 
 // EXACT_NOTE_ROUTER_V18
+const { onExactNoteText } = require("./flows/exactNoteTelegramFlow");
 
 if (!BOT_TOKEN) throw new Error("BOT_TOKEN missing");
 
@@ -287,17 +287,14 @@ bot.on("text", async (ctx) => {
 
   // perfume/user flow
   if (role === "admin" || role === "user") {
-
-
-    // EXACT_NOTE_ROUTER_V20B: exact note search must run before AI/profile flow
-
-
+    // EXACT_NOTE_ROUTER_V18: exact note search must run before AI/user flow
     const handledExactNote = await onExactNoteText(ctx);
-
-
     if (handledExactNote) return;
 
-
+    
+    // EXACT_NOTE_ROUTER_V20: exact note search must run before AI/profile flow
+    const handledExactNote = await onExactNoteText(ctx);
+    if (handledExactNote) return;
 
     const handledUser = await onUserText(ctx);
     if (handledUser) return;
