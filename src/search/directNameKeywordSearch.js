@@ -52,6 +52,10 @@ const INTENT_STOP_WORDS = new Set([
   "парфум", "парфуми", "парфумом", "парфюм", "парфюмом", "духи",
   "fragrance", "perfume", "на", "і", "и", "та", "або", "или", "or", "для", "for",
   "мене", "себе", "будь", "ласка", "будьласка",
+  // V30_GANYMEDE_PRIORITY_STOP_WORDS: прибираємо службові слова, щоб "номер аромата ганимед"
+  // не шукав усі рядки через слово "аромата/аромату", а залишав тільки саму назву.
+  "номер", "номера", "номеру", "номером", "номери", "номеров", "number",
+  "аромата", "аромате", "ароматів", "ароматов", "ароматний", "ароматна", "ароматное",
 ]);
 
 const GENDER_WORDS = new Set([
@@ -148,6 +152,13 @@ function getAliases() {
     ["чорний опіум", "black opium"], ["черный опиум", "black opium"], ["блек опіум", "black opium"], ["black opium", "black opium"],
     ["good girl gone bad", "good girl gone bad"], ["гуд герл гон бед", "good girl gone bad"], ["very good girl", "very good girl"], ["good girl", "good girl"], ["гуд герл", "good girl"],
     ["габа", "gaba"], ["hormone paris", "hormone paris"], ["гормон париж", "hormone paris"], ["хормон париж", "hormone paris"],
+
+    // V30_GANYMEDE_ALIASES: усі варіанти продавця ведемо до canonical "ganymede".
+    ["ганімед", "ganymede"], ["ганимед", "ganymede"], ["ганнимед", "ganymede"], ["ганиммед", "ganymede"],
+    ["номер ганімед", "ganymede"], ["номер ганимед", "ganymede"], ["номер ганнимед", "ganymede"], ["номер ганиммед", "ganymede"],
+    ["номер аромата ганімед", "ganymede"], ["номер аромата ганимед", "ganymede"],
+    ["номер аромату ганімед", "ganymede"], ["номер аромату ганимед", "ganymede"],
+    ["ganymede", "ganymede"], ["marc antoine barrois ganymede", "marc antoine barrois ganymede"],
   ];
 }
 
@@ -282,7 +293,12 @@ function buildPrefilterTerms(query) {
   const cleaned = cleanDirectQuery(query);
   const aliased = applyCommonAliases(cleaned);
   const strictBrand = detectStrictBrand(aliased);
-  const terms = unique([strictBrand, cleaned, aliased, ...tokenize(cleaned), ...tokenize(aliased)]).filter((x) => x && x.length >= 2);
+  // V30_EXACT_CANONICAL_QUERY_TERMS:
+  // Якщо aliases звели запит до одного canonical token, наприклад:
+  // "номер аромата ганимед" -> "ganymede",
+  // не додаємо назад зайві службові частини і не роздуваємо результати.
+  const baseTerms = unique([strictBrand, cleaned, aliased, ...tokenize(cleaned), ...tokenize(aliased)]);
+  const terms = baseTerms.filter((x) => x && x.length >= 2 && !isNoiseToken(x));
   return terms.slice(0, 16);
 }
 
